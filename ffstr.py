@@ -12,8 +12,11 @@ class ffstr():
 	
 	def __init__(self):
 		
-		# Input/Output from/torwards the binary
+		# Input/Output from/torwards tested the binary
 		self.io 	= None
+		
+		# Reference for ELF property reading
+		self.elf	= None
 		
 		# Store challenge location
 		self.location 	= None
@@ -56,6 +59,9 @@ class ffstr():
 		else:
 			self.location = "local"
 			self.path = args["BINARY"]
+			
+		if "ELF" in args.keys():
+			self.elf  = ELF(args["ELF"])
 			
 		if "BITS" in args.keys():
 			if args["BITS"] == "32":
@@ -367,8 +373,8 @@ class ffstr():
 		binary = b""
 		
 		# Working on a stack copy
-		if not self.start:
-			self.info("Cannot Dump ...")
+		if self.elf is not None:
+			log.info("No need to dump the binary ...")
 			return
 		
 		# Byte per Byte
@@ -430,6 +436,10 @@ class ffstr():
 		with open("./binary","wb") as fp:
 			fp.write(binary)
 			
+	def loadELF(self):
+		# Load ELF as per pwntools methodology
+		self.elf  = ELF(args["BINARY"])
+		
 if __name__ == "__main__":
 
 	# TBN instanciation
