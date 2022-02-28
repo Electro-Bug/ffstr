@@ -53,9 +53,6 @@ class ffstr():
 		
 	def getArgs(self):
 		# Get args from pwntools
-		# python3 TBN BINARY=./examples/vault
-		# python3 TBN BINARY=127.0.0.1:1337 -BITS=64
-		
 		if args["BINARY"].find(":") > -1 :
 			self.location = "remote"
 			self.ip, self.port = args["BINARY"].split(":")
