@@ -33,7 +33,12 @@ git clone https://github.com/Electro-Bug/ffstr.git
 cd ffstr
 ```
 ## Screenshot
-To be done
+
+Stack read function
+![Alltext](./img/stack-read.png)
+
+Binary dump
+![Alltext](./img/binary-dump.png)
 
 ## Demo
-To be done
+Soon
