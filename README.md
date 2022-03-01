@@ -18,7 +18,7 @@ This tools aims to solve easy format string challenges proposed on CTF.
 python3 ffstr.py options
 
  - ``BINARY`` : Provides connection information to the challenge, as ip:port
- - ``ELF``    : In case the challenge binary is provided, avoid dumping the binaru
+ - ``ELF``    : In case the challenge binary is provided, avoid dumping the binary
  - ``BITS``   : 32 or 64 bits, by default 64
  
  ```bash

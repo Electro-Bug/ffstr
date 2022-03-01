@@ -87,7 +87,11 @@ class ffstr():
 			self.timeout = float(args["TOUT"]) 
 		else:
 			self.timeout = 0.25
-		print(self.timeout,args)
+			
+		# DBG setting
+		if "DBG" not in args.keys():
+			context.log_level = 'error'
+
 		
 	def yesno(self):
 		# yes or no for further analysis
@@ -101,6 +105,7 @@ class ffstr():
 			self.io = remote(self.ip,self.port)
 			
 	def close(self):
+		# Close connection
 		self.io.close()
 		
 	def locateFuzzed(self,data,fuzz):
@@ -142,7 +147,7 @@ class ffstr():
 	def mentalist(self,nb_input=5):
 	
 		# Return a list of injectable parameters
-		log.progress("You have called the mentalist ...")
+		print("You have called the mentalist ...")
 		
 		# Generate fuzzed string for injection E41aF
 		fuzz = [ "".join(choices(hexdigits,k=5)).encode() for i in range(nb_input)]
@@ -156,7 +161,7 @@ class ffstr():
 		self.blind_behavior = []
 		for i,elt in enumerate(fuzz):
 			if data.find(elt)>0:
-				log.info("Parameter "+str(i+1)+" is reflected ")
+				print("Parameter "+str(i+1)+" is reflected ")
 				self.blind_behavior.append(True)
 			elif i >= n:
 				break
@@ -167,7 +172,7 @@ class ffstr():
 		self.locateFuzzed(data,fuzz)
 		
 		# Set behavior as a sequence of succesfull reflected input
-		log.success("Behavior defined ...")
+		print("Behavior defined ...")
 		
 		# checking injection by search hexa pattern is format string has succeede
 		for i in range(len(self.blind_behavior)):
@@ -182,8 +187,8 @@ class ffstr():
 				self.blind_behavior[i] = False
 				
 		# Final
-		log.success("Behavior validated ...")
-		print(self.blind_behavior)
+		print("Behavior validated ...")
+
 		
 		# close the connection
 		self.close()
@@ -217,14 +222,14 @@ class ffstr():
 			for elt in m:
 				self.stack.append(b"".join(elt))
 		
-		log.info(str(len(self.stack))+" stack elements recovered")
+		print(str(len(self.stack))+" stack elements recovered")
 
 	def checkflag(self,txt):
 		# Regex generic flag format
 		flags = re.findall(self.re_FlagPattern, txt)
 		if flags:
 			for flag in flags:
-				log.success(flag.decode())
+				print(flag.decode())
 				
 				# Continue or not ?
 				if not self.yesno():
@@ -263,7 +268,7 @@ class ffstr():
 				beg = fmt.find(b"%")
 				end = fmt.find(b"$")
 				self.stack_arg = int(fmt[beg+1:end])
-				log.info("Stack Argument is in position "+str(self.stack_arg)+" ("+fmt.decode()+")")
+				print("Stack Argument is in position "+str(self.stack_arg)+" ("+fmt.decode()+")")
 
 	def unOffset(self,eip):
 		# support function find the offset from the binary starts \x7fELF...
@@ -364,7 +369,7 @@ class ffstr():
 					regex = re.search(self.re_HexaPattern, data)
 					if regex:
 						leak = int(regex[0],16)
-				log.info("Leak "+hex(leak)+" ... Offset "+hex(guess))
+				print("Leak "+hex(leak)+" ... Offset "+hex(guess),end="\r")
 					
 				# Set payload
 				if self.bits == 32:
@@ -401,7 +406,7 @@ class ffstr():
 		
 		# Working on a stack copy
 		if self.elf is not None:
-			log.info("No need to dump the binary ...")
+			print("No need to dump the binary ...")
 			return
 		# Unique name for the dump binary
 		self.dump_name = str(int(time()))
@@ -421,7 +426,6 @@ class ffstr():
 				regex = re.search(self.re_HexaPattern, data)
 				if regex:
 					leak = int(regex[0],16)
-			#log.info("Leak "+hex(leak)+" ... Offset "+hex(offset))
 					
 			# Set payload
 			if self.bits == 32:
@@ -487,7 +491,7 @@ class ffstr():
 		
 		# Working on a stack copy
 		if self.elf is None:
-			log.info("No ELF as support ...")
+			print("No ELF as support ...")
 			return
 			
 		# read each symbols
@@ -507,7 +511,7 @@ class ffstr():
 				if regex:
 					leak = int(regex[0],16)
 					
-			log.info("Leak "+hex(leak)+" ... Offset "+hex(offset)+" "+sym+" "+hex(addr))
+			print("Leak "+hex(leak)+" ... Offset "+hex(offset)+" "+sym+" "+hex(addr),end="\r")
 					
 			# address correction if no PIE
 			if not self.elf.pie:
@@ -537,7 +541,7 @@ class ffstr():
 			# Extract data 
 			if data.find(b"d34d")>-1 and data.find(b"b33f")>-1:
 				dump =data[left:right]
-				print(dump)
+				print(dump,end="\r")
 
 			# Checking flag
 			self.checkflag(dump)
@@ -558,7 +562,7 @@ def help():
 	BINARY          Link to the chall either as a path ./chall or url 127.0.0.1:1337
 	ELF             Link to the supporting elf file, path only
 	BITS            32 or 64 bits
-	TOUT		Timeout in seconds
+	TOUT		Timeout in seconds ex: 0.25
 	
 	Examples:
 	
