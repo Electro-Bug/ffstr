@@ -547,7 +547,7 @@ if __name__ == "__main__":
 	exploit = ffstr()
 	exploit.getArgs()
 	exploit.mentalist(nb_input=10,t_out=0.25)
-	exploit.stackDump(nb_elt=100,t_out=0.5)
+	exploit.stackDump(nb_elt=100,t_out=0.25)
 	exploit.stackAnalyze()
 	exploit.locateBinary()
 	exploit.dumpBinary()
