@@ -21,7 +21,7 @@ python3 ffstr.py options
  - ``ELF``    : In case the challenge binary is provided, avoid dumping the binary
  - ``BITS``   : 32 or 64 bits, by default 64
  - ``TOUT``   : Timeout in seconds
- - ``DBG``    : Activate debuging aoutpur
+ - ``DBG``    : Activate debugging outpur
  
  ```bash
 python3 ffstr.py BINARY=127.0.0.1:1337 BITS=64 ELF=./ffstr64
