@@ -246,9 +246,10 @@ class ffstr():
 		for elt in _stack:
 			try:
 				# Keeping and padding hexadecimal 
-				_ = elt[2:].zfill(8)
+				_ = elt[2:]
 				# Values are reorder for human reading purpose
-				txt += unhexlify(_)[::-1]
+				_ = unhexlify(_)[::-1]+b"\x00"*self.block_byte
+				txt += _[:self.block_byte]
 			except:
 				# In case of error, or nil/null values
 				txt += b"\x00"*self.block_byte
@@ -387,7 +388,7 @@ class ffstr():
 				# ELF Header
 				if data.find(b"\x7fELF") > -1:
 					self.start = (i ,guess) 
-					print(data)
+					print(hex(leak),i,data)
 					self.close()
 					return
 
