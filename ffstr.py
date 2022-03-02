@@ -53,6 +53,9 @@ class ffstr():
 		# Timeout between connection
 		self.timeout = None
 		
+		# Anti DoS
+		self.last_request = None
+		self.nb_request   = None
 		
 	def getArgs(self):
 		# Get args from pwntools
@@ -102,8 +105,24 @@ class ffstr():
 		if self.location == "local":
 			self.io = process(self.path)
 		else:
+			# connection to a remote server
 			self.io = remote(self.ip,self.port)
 			
+		# avoid DoS by manual validation every 100 request
+		if self.nb_request is None:
+			self.nb_request = 1
+		self.nb_request += 1
+		if self.nb_request % 100 == 0:
+			self.yesno()
+			
+		# Too rapid connection also trigger manual request
+		if self.last_request is None:
+			self.last_request = 0
+		_time = time()
+		if _time - self.last_request < self.timeout:
+			sleep(self.timeout)
+		self.last_request = _time
+
 	def close(self):
 		# Close connection
 		self.io.close()
@@ -316,7 +335,7 @@ class ffstr():
 			self.connect()
 			# re-Initiate behavior
 			self.behavior = 0
-			
+		
 		# Send message accordingly
 		if self.blind_behavior[self.behavior %  len(self.blind_behavior)]:
 			self.io.sendline(exploit)
