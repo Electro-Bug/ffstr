@@ -63,6 +63,9 @@ class ffstr():
 		self.nb_request   = None
 		self.rate_limit	  = 100
 		
+		# Complementary argument
+		self.future_args = []
+		
 	def getArgs(self):
 		# Get args from pwntools
 
@@ -120,6 +123,10 @@ class ffstr():
 		# Reload DUMPED FILE
 		if "DUMPED" in args.keys():
 			self.dump_name = args.DUMPED
+			
+	def set_future_args(self,txt):
+		self.future_args.append(txt)
+		print("To save time on next run please use " + " ".join(self.future_args))
 				
 	def yesno(self):
 		# yes or no for further analysis
@@ -280,9 +287,7 @@ class ffstr():
 				# Continue or not ?
 				if not self.yesno():
 					exit(1)
-	
-	# NEXT CMD LINE
-	
+
 	def checkfstr(self,txt):
 		
 		# Lazy 
@@ -298,7 +303,7 @@ class ffstr():
 				end = fmt.find(b"$")
 				self.stack_arg = int(fmt[beg+1:end])
 				print("Stack Argument is in position "+str(self.stack_arg)+" ("+fmt.decode()+")")
-				print("Next time run with additional arg STACKARG="+str(self.stack_arg))
+				self.set_future_args("STACKARG="+str(self.stack_arg))
 					
 	def stackAnalyze(self):
 		
@@ -528,7 +533,7 @@ class ffstr():
 				if data.find(b"\x7fELF") > -1:
 					self.start = (i+1 ,guess) 
 					print(hex(leak),i+1,hex(guess),data)
-					print("Next time use START="+str(i+1)+":"+hex(guess))
+					self.set_future_args("START="+str(i+1)+":"+hex(guess))
 					self.close()
 					return
 
@@ -558,7 +563,7 @@ class ffstr():
 			
 		# Unique name for the dump binary
 		self.dump_name = str(int(time()))
-		print("Next time use DUMPED="+self.dump_name)
+		self.set_future_args("DUMPED="+self.dump_name)
 		
 		
 		# Byte per Byte
